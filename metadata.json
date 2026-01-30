@@ -1,0 +1,7 @@
+{
+  "name": "sapisoft2812d2",
+  "description": "A comprehensive web-based ERP and POS system for retail and repair shops, replicating the functionality of SapiSoft with sales, inventory, and service tracking modules.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
