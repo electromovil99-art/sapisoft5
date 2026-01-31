@@ -2,43 +2,34 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Send, MessageCircle, User, Loader2, Users, FileText, Paperclip, Settings, PlusCircle, ArrowLeft, Trash2, Edit2, Save, Filter, Briefcase, Image as ImageIcon, Search, X, Video, File, Forward, Tag, FileSpreadsheet } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
-import * as XLSX from 'xlsx'; // ⚠️ REQUIERE: npm install xlsx
+import * as XLSX from 'xlsx';
 
-// URL NGROK
 const BACKEND_URL = 'https://irrespectively-excursional-alisson.ngrok-free.dev';
 const NOTIFICATION_SOUND = 'https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3';
 
 export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
-  // --- ESTADOS ---
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState('DISCONNECTED');
   const [qrCode, setQrCode] = useState('');
   const [activeTab, setActiveTab] = useState<'CHAT' | 'BULK' | 'CONFIG'>('CHAT');
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
-
   const [chats, setChats] = useState<any[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [msgInput, setMsgInput] = useState("");
   const msgsEndRef = useRef<HTMLDivElement>(null);
   const [chatFilterStage, setChatFilterStage] = useState("Todos");
-
-  // CRM
   const [fullCrmDb, setFullCrmDb] = useState<any>({ clients: {}, stages: [], labels: [] });
   const [crmClient, setCrmClient] = useState<any>(null);
   const [stages, setStages] = useState<string[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   const [newNote, setNewNote] = useState("");
   const [isEditingAgent, setIsEditingAgent] = useState(false);
-
-  // CONFIG
   const [newStageName, setNewStageName] = useState("");
   const [newLabelName, setNewLabelName] = useState(""); 
   const [editingStageIndex, setEditingStageIndex] = useState<number | null>(null);
   const [tempStageName, setTempStageName] = useState("");
-
-  // DIFUSIÓN
   const [bulkFilterStage, setBulkFilterStage] = useState("Todas");
   const [bulkFilterLabel, setBulkFilterLabel] = useState("Todas"); 
   const [selectedBulkClients, setSelectedBulkClients] = useState<string[]>([]);
@@ -49,28 +40,48 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
   const [sendTogether, setSendTogether] = useState(true);
   const [minDelay, setMinDelay] = useState(4);
   const [maxDelay, setMaxDelay] = useState(8);
-
-  // REENVIAR
   const [forwardModalOpen, setForwardModalOpen] = useState(false);
   const [msgToForward, setMsgToForward] = useState<any>(null);
   const [forwardSearch, setForwardSearch] = useState("");
 
-  const audioRef = useRef(new Audio(NOTIFICATION_SOUND));
+  // FIX PARA VERCEL: Evitar error de Audio en el servidor
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      audioRef.current = new Audio(NOTIFICATION_SOUND);
+    }
+  }, []);
 
   useEffect(() => {
-    const skt = io(BACKEND_URL, { transports: ['websocket', 'polling'], extraHeaders: { "ngrok-skip-browser-warning": "true" } });
+    const skt = io(BACKEND_URL, { 
+      transports: ['websocket', 'polling'], 
+      extraHeaders: { "ngrok-skip-browser-warning": "true" } 
+    });
     setSocket(skt);
     skt.on('connect', () => setStatus('INITIALIZING'));
     skt.on('qr', (qr) => { setStatus('QR_READY'); setQrCode(qr); });
     skt.on('ready', () => { setStatus('READY'); fetchChats(); fetchFullDb(); });
-    skt.on('message', (msg) => { handleNewMsg(msg); audioRef.current.play().catch(()=>{}); });
+    skt.on('message', (msg) => { 
+      handleNewMsg(msg); 
+      audioRef.current?.play().catch(() => {}); 
+    });
     skt.on('message_create', (msg) => { if(msg.fromMe) handleNewMsg(msg); });
     skt.on('bulk_progress', setBulkProgress);
     skt.on('bulk_complete', (res) => { setBulkProgress(null); alert(`✅ FINALIZADO.\nEnviados: ${res?.sent}\nErrores: ${res?.errors}`); });
     return () => { skt.disconnect(); };
   }, []);
 
-  const api = async (path: string, opts?: any) => fetch(`${BACKEND_URL}${path}`, { ...opts, headers: { ...opts?.headers, "ngrok-skip-browser-warning": "true", 'Content-Type': 'application/json' } }).then(r => r.json());
+  const api = async (path: string, opts?: any) => {
+    const response = await fetch(`${BACKEND_URL}${path}`, { 
+      ...opts, 
+      headers: { 
+        ...opts?.headers, 
+        "ngrok-skip-browser-warning": "true", 
+        'Content-Type': 'application/json' 
+      } 
+    });
+    return response.json();
+  };
 
   const fetchChats = () => api('/chats').then(data => setChats(Array.isArray(data) ? data : []));
   const fetchFullDb = async () => { 
@@ -81,18 +92,24 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
   };
   
   const loadChat = async (id: string) => {
-      setSelectedChatId(id); setShowMobileChat(true);
-      setMessages(await api(`/chats/${id}/messages`));
+      setSelectedChatId(id); 
+      setShowMobileChat(true);
+      const data = await api(`/chats/${id}/messages`);
+      setMessages(data);
       setTimeout(()=>msgsEndRef.current?.scrollIntoView({ behavior: "smooth" }), 200);
       const phone = id.replace(/\D/g, '');
-      setCrmClient(await api(`/crm/client/${phone}`));
+      const clientRes = await api(`/crm/client/${phone}`);
+      setCrmClient(clientRes);
   };
 
   const handleNewMsg = (msg: any) => {
       setSelectedChatId(prev => {
           if(prev === (msg.fromMe ? msg.to : msg.from)) { 
               if(msg.hasMedia) setTimeout(() => loadChat(prev), 1500); 
-              else { setMessages(m => [...m, msg]); setTimeout(()=>msgsEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); }
+              else { 
+                setMessages(m => [...m, msg]); 
+                setTimeout(()=>msgsEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); 
+              }
           }
           return prev;
       });
@@ -122,27 +139,22 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
           const wb = XLSX.read(bstr, { type: 'binary' });
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
-          const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-          const numbers = data.map((row: any) => row[0]).filter((n: any) => n && n.toString().length > 6);
+          const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+          const numbers = data.map((row) => row[0]).filter((n) => n && n.toString().length > 6);
           setManualNumbers(prev => (prev ? prev + ", " : "") + numbers.join(", "));
           alert(`✅ Importados ${numbers.length} números`);
       };
       reader.readAsBinaryString(file);
   };
 
-  // RENDERIZADOR MENSAJES
   const renderMessageContent = (m: any) => {
       const isMedia = m.hasMedia || m.type === 'image' || m.type === 'video';
       const mediaSrc = m.mediaData ? `data:${m.mimetype};base64,${m.mediaData}` : null;
-
       return (
           <div className={`max-w-[85%] md:max-w-[60%] p-2 rounded-lg text-sm shadow relative break-words flex flex-col gap-1 group ${m.fromMe?'bg-[#d9fdd3] rounded-tr-none':'bg-white rounded-tl-none'}`}>
-              
-              {/* BOTÓN REENVIAR (Visible siempre en móvil, hover en PC) */}
               <div className="flex opacity-70 md:opacity-0 md:group-hover:opacity-100 absolute -top-2 -right-2 bg-white rounded-full shadow p-1 cursor-pointer z-10 transition-opacity" onClick={()=>{setMsgToForward(m); setForwardModalOpen(true);}}>
                   <Forward size={14} className="text-blue-500"/>
               </div>
-
               {isMedia && (
                   <div className="rounded overflow-hidden mb-1">
                       {mediaSrc ? (
@@ -159,7 +171,6 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       );
   };
 
-  // FILTROS
   const filteredChatList = useMemo(() => {
       if (!Array.isArray(chats)) return [];
       let list = chats;
@@ -175,8 +186,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       const allPhones = new Set([...chats.map(c => c.id.user), ...(clients || []).map(c => c.phone)]);
       let list = Array.from(allPhones).map(phone => {
           const crmInfo = fullCrmDb.clients[phone] || {};
-          const name = clients?.find(c=>c.phone === phone)?.name || chats.find(c=>c.id.user === phone)?.name || phone;
-          return { phone, name, stage: crmInfo.stage || stages[0], labels: crmInfo.labels || [] };
+          return { phone, name: clients?.find(c=>c.phone === phone)?.name || chats.find(c=>c.id.user === phone)?.name || phone, stage: crmInfo.stage || stages[0], labels: crmInfo.labels || [] };
       });
       if(bulkFilterStage !== "Todas") list = list.filter(c => c.stage === bulkFilterStage);
       if(bulkFilterLabel !== "Todas") list = list.filter(c => c.labels.includes(bulkFilterLabel));
@@ -187,7 +197,6 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       return list;
   }, [chats, clients, fullCrmDb, bulkFilterStage, bulkFilterLabel, stages, searchTerm]);
 
-  // CRM & CONFIG
   const updateCrm = async (field: string, value: any) => {
       if(!selectedChatId) return;
       const phone = selectedChatId.replace(/\D/g, '');
@@ -211,12 +220,10 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
 
   return (
     <div className="flex h-full w-full bg-white overflow-hidden text-slate-800 font-sans relative">
-      {/* SIDEBAR */}
       <div className={`flex flex-col bg-slate-50 border-r h-full ${showMobileChat ? 'hidden md:flex md:w-80' : 'w-full md:w-80'}`}>
           <div className="p-3 bg-emerald-600 text-white flex justify-between items-center shadow shrink-0"><span className="font-bold flex gap-2"><MessageCircle/> SapiSoft</span></div>
           <div className="flex text-[10px] font-bold border-b bg-white shrink-0">{['CHAT','BULK','CONFIG'].map(t => (<button key={t} onClick={()=>setActiveTab(t as any)} className={`flex-1 p-3 ${activeTab===t?'text-emerald-600 border-b-2 border-emerald-600':''}`}>{t}</button>))}</div>
           <div className="p-2 bg-white border-b shrink-0"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-2 py-1.5 border"><Search size={14} className="text-slate-400"/><input className="bg-transparent outline-none text-xs w-full" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/></div></div>
-          
           <div className="flex-1 overflow-y-auto min-h-0">
               {activeTab === 'CHAT' && (
                   <>
@@ -261,7 +268,6 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
           </div>
       </div>
 
-      {/* CHAT CENTRAL */}
       <div className={`flex-1 flex-col bg-[#efeae2] relative h-full min-h-0 ${showMobileChat ? 'flex' : 'hidden md:flex'}`}>
           {activeTab === 'BULK' ? (
               <div className="flex-1 overflow-y-auto p-4 flex justify-center min-h-0">
@@ -271,7 +277,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
                             <div className="flex gap-4 mb-4 bg-slate-50 p-2 rounded border"><div className="flex-1"><label className="text-[10px] font-bold">Min Delay</label><input type="number" className="w-full border rounded" value={minDelay} onChange={e=>setMinDelay(Number(e.target.value))}/></div><div className="flex-1"><label className="text-[10px] font-bold">Max Delay</label><input type="number" className="w-full border rounded" value={maxDelay} onChange={e=>setMaxDelay(Number(e.target.value))}/></div></div>
                             <textarea className="w-full border p-3 rounded mb-3" rows={4} placeholder="Mensaje..." value={bulkMessage} onChange={e=>setBulkMessage(e.target.value)}/>
                             <div className="flex flex-col gap-2 mb-4"><label className="flex items-center gap-2 cursor-pointer bg-slate-100 p-2 rounded border"><Paperclip size={16}/> <span className="text-sm font-bold">{bulkFile ? bulkFile.filename : 'Subir Imagen'}</span><input type="file" className="hidden" onChange={handleFileUpload} accept="image/*,video/*"/>{bulkFile && <button onClick={(e)=>{e.preventDefault(); setBulkFile(null);}} className="ml-auto text-red-500">X</button>}</label>{bulkFile && (<label className="flex items-center gap-2 p-2 border rounded bg-blue-50 cursor-pointer"><input type="checkbox" checked={sendTogether} onChange={()=>setSendTogether(!sendTogether)}/><span className="text-xs font-bold text-blue-800">Enviar junto (Caption)</span></label>)}</div>
-                            <button onClick={sendBulk} className="w-full bg-blue-600 text-white py-3 rounded font-bold shadow hover:bg-blue-700">ENVIAR AHORA</button>
+                            <button onClick={() => socket?.emit('bulk_send', { numbers: selectedBulkClients.concat(manualNumbers.split(',').map(n => n.trim())), message: bulkMessage, media: bulkFile, minDelay, maxDelay, sendTogether })} className="w-full bg-blue-600 text-white py-3 rounded font-bold shadow hover:bg-blue-700">ENVIAR AHORA</button>
                       </>)}
                   </div>
               </div>
@@ -284,7 +290,6 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
           ) : <div className="flex items-center justify-center h-full text-slate-400">Selecciona un chat</div>}
       </div>
 
-      {/* CRM PANEL */}
       {selectedChatId && crmClient && activeTab === 'CHAT' && (
           <div className="hidden md:flex w-72 bg-white border-l flex-col shadow-xl z-20 h-full">
               <div className="p-4 bg-slate-50 border-b shrink-0"><h3 className="font-bold text-slate-700 flex gap-2 items-center"><User size={16}/> Cliente</h3></div>
@@ -297,7 +302,6 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
           </div>
       )}
 
-      {/* MODAL REENVIAR */}
       {forwardModalOpen && (
           <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
               <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm flex flex-col max-h-[80vh]">
