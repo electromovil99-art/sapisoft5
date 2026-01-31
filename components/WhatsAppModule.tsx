@@ -1,371 +1,387 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Phone, User, MessageCircle, RefreshCw, Loader2, QrCode, LogOut } from 'lucide-react';
+import { Send, MessageCircle, User, Loader2, Users, FileText, Paperclip, Calendar, CheckSquare, Save } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 
-interface Contact {
+// === TIPOS DE DATOS ===
+interface Client {
   id: string;
   name: string;
-  number: string;
-  pushname?: string;
-  isMyContact: boolean;
+  phone: string; // Esperamos formato limpio '51999...'
+  category?: string;
 }
 
-interface Message {
-  id: { id: string, fromMe: boolean };
-  body: string;
-  timestamp: number;
-  from: string;
-  to: string;
-  type: string;
-  fromMe: boolean;
+interface Note {
+    id: number;
+    text: string;
+    date: string;
+    reminder: string | null;
 }
 
 interface Chat {
   id: { _serialized: string };
   name: string;
-  isGroup: boolean;
-  timestamp: number;
   unreadCount: number;
-  lastMessage?: Message;
+  lastMessage?: { body: string, fromMe: boolean, timestamp: number };
 }
 
 interface Props {
-  products: any[];
-  clients: any[];
-  chats: any[]; 
-  setChats: (chats: any[]) => void;
+  clients: Client[]; // Viene de SapiSoft (Tus clientes registrados)
 }
 
-// TU URL DE NGROK (Ya configurada correctamente)
+// ⚠️ TU URL DE NGROK AQUÍ
 const BACKEND_URL = 'https://irrespectively-excursional-alisson.ngrok-free.dev';
 
 export default function WhatsAppModule({ clients }: Props) {
+  // Estados de Conexión
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [status, setStatus] = useState<'DISCONNECTED' | 'INITIALIZING' | 'QR_READY' | 'AUTHENTICATED' | 'READY'>('DISCONNECTED');
-  const [qrCode, setQrCode] = useState<string>('');
+  const [status, setStatus] = useState('DISCONNECTED');
+  const [qrCode, setQrCode] = useState('');
+  
+  // Estados de Chat
+  const [activeTab, setActiveTab] = useState<'CHAT' | 'BULK'>('CHAT');
   const [chats, setChats] = useState<Chat[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [messageInput, setMessageInput] = useState("");
-  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [messages, setMessages] = useState<any[]>([]);
+  const [msgInput, setMsgInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // 1. CONEXIÓN SOCKET (MODIFICADO: Agregamos extraHeaders)
+  // Estados CRM
+  const [crmNotes, setCrmNotes] = useState<Note[]>([]);
+  const [newNote, setNewNote] = useState("");
+  const [reminderDate, setReminderDate] = useState("");
+
+  // Estados Difusión (Masivos)
+  const [bulkMessage, setBulkMessage] = useState("");
+  const [selectedClients, setSelectedClients] = useState<string[]>([]); // Array de teléfonos
+  const [bulkFile, setBulkFile] = useState<{data: string, mimetype: string, filename: string} | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{current: number, total: number} | null>(null);
+
+  // --- 1. CONEXIÓN INTELIGENTE ---
   useEffect(() => {
     const newSocket = io(BACKEND_URL, {
         transports: ['websocket', 'polling'],
-        extraHeaders: {
-            "ngrok-skip-browser-warning": "true" // <--- LA LLAVE MAESTRA
-        }
+        extraHeaders: { "ngrok-skip-browser-warning": "true" }
     });
     setSocket(newSocket);
 
-    return () => {
-      newSocket.disconnect();
-    };
+    // Eventos
+    newSocket.on('connect', () => setStatus('INITIALIZING'));
+    newSocket.on('qr', (qr) => { setStatus('QR_READY'); setQrCode(qr); });
+    newSocket.on('ready', () => { 
+        setStatus('READY'); 
+        fetchChats(); 
+    });
+    newSocket.on('authenticated', () => setStatus('AUTHENTICATED'));
+    
+    // Escuchar progreso de masivos
+    newSocket.on('bulk_progress', (data) => setBulkProgress(data));
+    newSocket.on('bulk_complete', () => {
+        setBulkProgress(null);
+        alert("✅ ¡Difusión completada con éxito!");
+        setBulkMessage("");
+        setBulkFile(null);
+    });
+
+    // Escuchar mensajes nuevos
+    newSocket.on('message', handleIncomingMsg);
+    newSocket.on('message_create', (msg) => { if(msg.fromMe) handleIncomingMsg(msg); });
+
+    return () => { newSocket.disconnect(); };
   }, []);
 
-  // Socket Event Listeners
-  useEffect(() => {
-    if (!socket) return;
+  const handleIncomingMsg = (msg: any) => {
+      // Lógica simple para actualizar chat en vivo (puedes mejorarla)
+      if (selectedChatId === (msg.fromMe ? msg.to : msg.from)) {
+          setMessages(prev => [...prev, msg]);
+          setTimeout(() => messagesEndRef.current?.scrollIntoView(), 100);
+      }
+  };
 
-    socket.on('connect', () => {
-      console.log('Connected to WhatsApp backend');
-      setStatus('INITIALIZING');
-    });
-
-    socket.on('qr', (qr: string) => {
-      setStatus('QR_READY');
-      setQrCode(qr);
-    });
-
-    socket.on('ready', () => {
-      setStatus('READY');
-      setQrCode('');
-      fetchChats();
-    });
-
-    socket.on('authenticated', () => {
-      setStatus('AUTHENTICATED');
-    });
-
-    socket.on('auth_failure', () => {
-      setStatus('DISCONNECTED');
-      setQrCode('');
-    });
-
-    socket.on('message', (message: Message) => {
-      handleIncomingMessage(message);
-    });
-    
-    socket.on('message_create', (message: Message) => {
-       if(message.fromMe) handleIncomingMessage(message);
-    });
-
-    socket.on('disconnect', () => {
-      setStatus('DISCONNECTED');
-    });
-
-    return () => {
-      socket.off('connect');
-      socket.off('qr');
-      socket.off('ready');
-      socket.off('authenticated');
-      socket.off('auth_failure');
-      socket.off('message');
-      socket.off('message_create');
-      socket.off('disconnect');
-    };
-  }, [socket]);
-
-  // 2. FETCH CHATS (MODIFICADO: Agregamos headers)
+  // --- 2. API CALLS ---
   const fetchChats = async () => {
-    try {
-      const res = await fetch(`${BACKEND_URL}/chats`, {
-          headers: { "ngrok-skip-browser-warning": "true" } // <--- LLAVE MAESTRA
+      try {
+        const res = await fetch(`${BACKEND_URL}/chats`, { headers: { "ngrok-skip-browser-warning": "true" }});
+        const data = await res.json();
+        setChats(data);
+      } catch(e) { console.error(e); }
+  };
+
+  const loadChat = async (chatId: string) => {
+      setSelectedChatId(chatId);
+      // Cargar mensajes
+      const res = await fetch(`${BACKEND_URL}/chats/${chatId}/messages`, { headers: { "ngrok-skip-browser-warning": "true" }});
+      setMessages(await res.json());
+      setTimeout(() => messagesEndRef.current?.scrollIntoView(), 100);
+      
+      // Cargar CRM
+      const phone = chatId.replace('@c.us', '');
+      const resCrm = await fetch(`${BACKEND_URL}/crm/${phone}`, { headers: { "ngrok-skip-browser-warning": "true" }});
+      const dataCrm = await resCrm.json();
+      setCrmNotes(dataCrm.notes || []);
+  };
+
+  const sendMessage = async () => {
+      if(!msgInput.trim() || !selectedChatId) return;
+      await fetch(`${BACKEND_URL}/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', "ngrok-skip-browser-warning": "true" },
+          body: JSON.stringify({ chatId: selectedChatId, content: msgInput })
+      });
+      setMsgInput("");
+  };
+
+  // --- 3. FUNCIONES CRM ---
+  const saveNote = async () => {
+      if(!newNote.trim() || !selectedChatId) return;
+      const phone = selectedChatId.replace('@c.us', '');
+      
+      const res = await fetch(`${BACKEND_URL}/crm/note`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', "ngrok-skip-browser-warning": "true" },
+          body: JSON.stringify({ phone, note: newNote, reminderDate })
       });
       const data = await res.json();
-      setChats(data);
-    } catch (error) {
-      console.error("Error fetching chats:", error);
-    }
+      setCrmNotes(data.data.notes);
+      setNewNote("");
+      setReminderDate("");
   };
 
-  const handleIncomingMessage = (message: Message) => {
-    const chatId = message.fromMe ? message.to : message.from;
-
-    if (selectedChatId === chatId) {
-      setMessages((prev) => [...prev, message]);
-      scrollToBottom();
-    }
-
-    setChats((prevChats) => {
-      const chatIndex = prevChats.findIndex(c => c.id._serialized === chatId);
-      if (chatIndex > -1) {
-        const updatedChat = { 
-            ...prevChats[chatIndex], 
-            lastMessage: message, 
-            timestamp: message.timestamp,
-            unreadCount: (selectedChatId === chatId || message.fromMe) ? 0 : prevChats[chatIndex].unreadCount + 1
-        };
-        const newChats = [...prevChats];
-        newChats.splice(chatIndex, 1);
-        return [updatedChat, ...newChats];
+  // --- 4. FUNCIONES DIFUSIÓN ---
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if(file) {
+          const reader = new FileReader();
+          reader.readAsDataURL(file);
+          reader.onloadend = () => {
+              setBulkFile({
+                  data: (reader.result as string).split(',')[1], // Base64 puro
+                  mimetype: file.type,
+                  filename: file.name
+              });
+          };
       }
-      return prevChats;
-    });
   };
 
-  // 3. FETCH MESSAGES (MODIFICADO: Agregamos headers)
-  useEffect(() => {
-    if (!selectedChatId) return;
-    setLoadingMessages(true);
-    fetch(`${BACKEND_URL}/chats/${selectedChatId}/messages`, {
-        headers: { "ngrok-skip-browser-warning": "true" } // <--- LLAVE MAESTRA
-    })
-      .then(res => res.json())
-      .then(data => {
-        setMessages(data);
-        setLoadingMessages(false);
-        scrollToBottom();
-      })
-      .catch(err => {
-        console.error("Error fetching messages:", err);
-        setLoadingMessages(false);
-      });
-  }, [selectedChatId]);
-
-  const scrollToBottom = () => {
-    setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, 100);
-  };
-
-  // 4. SEND MESSAGE (MODIFICADO: Agregamos headers)
-  const sendMessage = async () => {
-    if (!selectedChatId || !messageInput.trim()) return;
-
-    try {
-      const response = await fetch(`${BACKEND_URL}/messages`, {
-        method: 'POST',
-        headers: { 
-            'Content-Type': 'application/json',
-            "ngrok-skip-browser-warning": "true" // <--- LLAVE MAESTRA
-        },
-        body: JSON.stringify({
-          chatId: selectedChatId,
-          content: messageInput
-        })
-      });
+  const sendBulk = () => {
+      if(selectedClients.length === 0) return alert("Selecciona al menos un cliente");
+      if(!bulkMessage && !bulkFile) return alert("Escribe un mensaje o sube un archivo");
       
-      if (response.ok) {
-        setMessageInput("");
-      }
-    } catch (error) {
-      console.error("Error sending message:", error);
-      alert("Error al enviar mensaje");
-    }
-  };
-
-  // 5. LOGOUT (MODIFICADO: Agregamos headers)
-  const handleLogout = async () => {
-      try {
-          await fetch(`${BACKEND_URL}/logout`, { 
-              method: 'POST',
-              headers: { "ngrok-skip-browser-warning": "true" } // <--- LLAVE MAESTRA
+      if(confirm(`¿Enviar mensaje a ${selectedClients.length} personas?`)) {
+          socket?.emit('bulk_send', {
+              numbers: selectedClients,
+              message: bulkMessage,
+              media: bulkFile
           });
-          setStatus('DISCONNECTED');
-          setQrCode('');
-          setChats([]);
-          setSelectedChatId(null);
-      } catch (error) {
-          console.error("Logout failed", error);
       }
   };
 
-  const getChatName = (chat: Chat) => {
-      if (!chat) return "Desconocido";
-      const number = chat.id._serialized.replace('@c.us', '');
-      const localClient = clients.find(c => c.phone?.includes(number) || c.dni === number);
-      return localClient ? localClient.name : (chat.name || number);
+  const toggleClient = (phone: string) => {
+      if(selectedClients.includes(phone)) {
+          setSelectedClients(prev => prev.filter(p => p !== phone));
+      } else {
+          setSelectedClients(prev => [...prev, phone]);
+      }
   };
+
+  // --- RENDERIZADO ---
+  if(status !== 'READY' && status !== 'AUTHENTICATED') {
+      return (
+        <div className="flex flex-col items-center justify-center h-full bg-slate-100 text-slate-500">
+            {status === 'QR_READY' && qrCode ? (
+                <div className="bg-white p-6 rounded-xl shadow-lg text-center">
+                    <QRCodeSVG value={qrCode} size={220} />
+                    <p className="mt-4 font-bold text-slate-700">Escanea para activar el CRM</p>
+                </div>
+            ) : (
+                <div className="text-center">
+                    <Loader2 className="animate-spin mb-2 mx-auto" size={40}/>
+                    <p>Conectando con SapiSoft Server...</p>
+                </div>
+            )}
+        </div>
+      );
+  }
 
   return (
-    <div className="flex h-full bg-slate-100 dark:bg-slate-950 p-4 gap-4 animate-in fade-in duration-500">
+    <div className="flex h-full bg-slate-50 gap-2 p-2">
       
-      {/* IZQUIERDA: LISTA DE CONTACTOS */}
-      <div className="w-1/3 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 overflow-hidden flex flex-col">
-        <div className="p-4 bg-emerald-600 text-white font-black uppercase tracking-widest text-xs flex items-center justify-between">
-          <div className="flex items-center gap-2"><MessageCircle size={16}/> WhatsApp SapiSoft</div>
-          <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${status === 'READY' ? 'bg-green-300' : 'bg-red-400'}`}></div>
-              {status === 'READY' && <button onClick={handleLogout} title="Cerrar Sesión"><LogOut size={14}/></button>}
+      {/* 1. BARRA LATERAL (Chats) */}
+      <div className="w-1/4 bg-white rounded-lg shadow-sm flex flex-col border">
+          <div className="p-3 border-b flex gap-2 bg-slate-100">
+              <button 
+                onClick={() => setActiveTab('CHAT')}
+                className={`flex-1 py-2 text-xs font-bold rounded ${activeTab === 'CHAT' ? 'bg-emerald-500 text-white' : 'bg-white text-slate-600'}`}
+              >
+                  CHATS
+              </button>
+              <button 
+                onClick={() => setActiveTab('BULK')}
+                className={`flex-1 py-2 text-xs font-bold rounded ${activeTab === 'BULK' ? 'bg-blue-600 text-white' : 'bg-white text-slate-600'}`}
+              >
+                  DIFUSIÓN 📢
+              </button>
           </div>
-        </div>
-        
-        {status !== 'READY' && status !== 'AUTHENTICATED' ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
-                {status === 'QR_READY' && qrCode ? (
-                    <>
-                        <p className="text-sm font-bold text-slate-600 dark:text-slate-300">Escanea el código QR con WhatsApp</p>
-                        <div className="bg-white p-4 rounded-xl shadow-lg">
-                            <QRCodeSVG value={qrCode} size={200} />
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <Loader2 className="animate-spin text-emerald-600" size={32} />
-                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Conectando con el servidor...</p>
-                        <p className="text-[10px] text-slate-400">Asegúrate que el backend (puerto 3000) y Ngrok estén corriendo.</p>
-                    </>
-                )}
-            </div>
-        ) : (
-            <div className="overflow-y-auto flex-1 custom-scrollbar">
-                {chats.map(chat => (
-                    <div 
-                        key={chat.id._serialized}
-                        onClick={() => setSelectedChatId(chat.id._serialized)}
-                        className={`p-4 border-b border-slate-100 dark:border-slate-800 cursor-pointer transition-colors ${selectedChatId === chat.id._serialized ? 'bg-emerald-50 dark:bg-emerald-900/20 border-l-4 border-l-emerald-500' : 'hover:bg-slate-50 dark:hover:bg-slate-800'}`}
-                    >
-                        <div className="flex justify-between items-start mb-1">
-                            <div className="font-bold text-slate-800 dark:text-white text-sm uppercase truncate max-w-[180px]">
-                                {getChatName(chat)}
+
+          <div className="flex-1 overflow-y-auto">
+              {activeTab === 'CHAT' ? (
+                  chats.map(chat => (
+                      <div key={chat.id._serialized} onClick={() => loadChat(chat.id._serialized)} className="p-3 border-b hover:bg-slate-50 cursor-pointer">
+                          <div className="font-bold text-sm text-slate-800 truncate">{chat.name}</div>
+                          <div className="text-xs text-slate-400 truncate">{chat.lastMessage?.body || 'Multimedia'}</div>
+                      </div>
+                  ))
+              ) : (
+                  // LISTA PARA SELECCIÓN MASIVA
+                  <div className="p-2">
+                      <div className="p-2 bg-blue-50 text-blue-800 text-xs rounded mb-2 font-bold">
+                          Seleccionados: {selectedClients.length}
+                      </div>
+                      {clients.map((client, idx) => (
+                          <div key={idx} className="flex items-center gap-2 p-2 hover:bg-slate-50 border-b">
+                              <input 
+                                type="checkbox" 
+                                checked={selectedClients.includes(client.phone)}
+                                onChange={() => toggleClient(client.phone)}
+                                className="w-4 h-4 text-blue-600"
+                              />
+                              <div>
+                                  <div className="text-sm font-bold">{client.name}</div>
+                                  <div className="text-xs text-slate-400">{client.phone} | {client.category || 'General'}</div>
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              )}
+          </div>
+      </div>
+
+      {/* 2. ÁREA CENTRAL (Chat o Compositor Masivo) */}
+      <div className="flex-1 bg-white rounded-lg shadow-sm border flex flex-col bg-[#e5ddd5] relative">
+          {activeTab === 'CHAT' ? (
+              selectedChatId ? (
+                  <>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                        {messages.map((m, i) => (
+                            <div key={i} className={`flex ${m.fromMe ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-[70%] p-2 rounded-lg text-sm ${m.fromMe ? 'bg-[#d9fdd3]' : 'bg-white'}`}>
+                                    {m.body}
+                                </div>
                             </div>
-                            {chat.timestamp && (
-                                <span className="text-[10px] text-slate-400">
-                                    {new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                                </span>
-                            )}
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <div className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[200px]">
-                                {chat.lastMessage?.fromMe && <span className="text-slate-400 italic">Tú: </span>}
-                                {chat.lastMessage?.body || <span className="italic text-slate-300">Imagen/Audio</span>}
-                            </div>
-                            {chat.unreadCount > 0 && (
-                                <span className="bg-emerald-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                                    {chat.unreadCount}
-                                </span>
-                            )}
-                        </div>
+                        ))}
+                        <div ref={messagesEndRef} />
                     </div>
-                ))}
-            </div>
-        )}
+                    <div className="p-2 bg-slate-100 flex gap-2">
+                        <input 
+                            className="flex-1 p-2 rounded border" 
+                            value={msgInput} 
+                            onChange={e => setMsgInput(e.target.value)} 
+                            onKeyPress={e => e.key === 'Enter' && sendMessage()}
+                            placeholder="Escribe un mensaje..."
+                        />
+                        <button onClick={sendMessage} className="bg-emerald-500 text-white p-2 rounded"><Send size={18}/></button>
+                    </div>
+                  </>
+              ) : (
+                  <div className="flex items-center justify-center h-full text-slate-400">Selecciona un chat</div>
+              )
+          ) : (
+              // VISTA DE DIFUSIÓN (MASIVOS)
+              <div className="p-8 flex flex-col items-center justify-center h-full bg-slate-50">
+                  <div className="w-full max-w-md bg-white p-6 rounded-xl shadow-lg">
+                      <h2 className="text-xl font-bold text-blue-700 mb-4 flex items-center gap-2"><Users/> Nueva Campaña</h2>
+                      
+                      {bulkProgress ? (
+                          <div className="text-center py-8">
+                              <Loader2 className="animate-spin mx-auto text-blue-600 mb-4" size={48}/>
+                              <div className="text-2xl font-bold">{bulkProgress.current} / {bulkProgress.total}</div>
+                              <p className="text-slate-500 text-sm">Enviando a: {bulkProgress.lastPhone}</p>
+                              <div className="w-full bg-slate-200 h-2 rounded-full mt-4 overflow-hidden">
+                                  <div className="bg-blue-600 h-full transition-all" style={{width: `${(bulkProgress.current / bulkProgress.total) * 100}%`}}></div>
+                              </div>
+                          </div>
+                      ) : (
+                          <>
+                            <textarea 
+                                className="w-full p-3 border rounded-lg mb-4 bg-slate-50 min-h-[100px]"
+                                placeholder="Escribe tu mensaje de oferta aquí..."
+                                value={bulkMessage}
+                                onChange={e => setBulkMessage(e.target.value)}
+                            />
+                            
+                            <div className="mb-4">
+                                <label className="block text-xs font-bold text-slate-500 mb-1">ADJUNTAR FOTO/VIDEO (Opcional)</label>
+                                <div className="flex gap-2 items-center">
+                                    <label className="cursor-pointer bg-slate-200 hover:bg-slate-300 px-4 py-2 rounded text-sm flex items-center gap-2">
+                                        <Paperclip size={16}/> {bulkFile ? 'Archivo cargado' : 'Subir'}
+                                        <input type="file" className="hidden" onChange={handleFileUpload} accept="image/*,video/*"/>
+                                    </label>
+                                    {bulkFile && <span className="text-xs text-blue-600 truncate max-w-[150px]">{bulkFile.filename}</span>}
+                                    {bulkFile && <button onClick={() => setBulkFile(null)} className="text-red-500 text-xs">X</button>}
+                                </div>
+                            </div>
+
+                            <button 
+                                onClick={sendBulk}
+                                disabled={selectedClients.length === 0}
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-bold flex justify-center items-center gap-2 disabled:opacity-50"
+                            >
+                                <Send size={18}/> ENVIAR A {selectedClients.length} CLIENTES
+                            </button>
+                            <p className="text-[10px] text-slate-400 mt-2 text-center">El sistema enviará con pausas aleatorias para seguridad.</p>
+                          </>
+                      )}
+                  </div>
+              </div>
+          )}
       </div>
 
-      {/* DERECHA: VENTANA DE CHAT */}
-      <div className="flex-1 bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-        {selectedChatId && status === 'READY' ? (
-          <>
-            {/* CABECERA */}
-            <div className="p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950 flex justify-between items-center">
-               <div className="flex items-center gap-3">
-                   <div className="w-8 h-8 bg-slate-200 dark:bg-slate-800 rounded-full flex items-center justify-center">
-                       <User size={16} className="text-slate-500"/>
-                   </div>
-                   <div>
-                       <span className="font-bold text-slate-800 dark:text-white text-sm block">
-                           {getChatName(chats.find(c => c.id._serialized === selectedChatId)!)}
-                       </span>
-                       <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest">En línea</span>
-                   </div>
-               </div>
-               <button onClick={() => setSelectedChatId(null)} className="text-slate-400 hover:text-red-500 transition-colors"><XCircleIcon size={20}/></button>
-            </div>
+      {/* 3. PANEL DERECHO (CRM y NOTAS) */}
+      {activeTab === 'CHAT' && selectedChatId && (
+          <div className="w-1/4 bg-white border-l p-4 flex flex-col shadow-sm">
+              <div className="font-bold text-slate-700 mb-4 flex items-center gap-2">
+                  <FileText size={18} className="text-orange-500"/> Notas CRM
+              </div>
+              
+              <div className="flex-1 overflow-y-auto mb-4 space-y-3">
+                  {crmNotes.length === 0 && <p className="text-sm text-slate-400 italic">No hay notas para este cliente.</p>}
+                  {crmNotes.map(note => (
+                      <div key={note.id} className="bg-yellow-50 p-3 rounded border border-yellow-200 text-sm relative group">
+                          <p className="text-slate-800">{note.text}</p>
+                          <div className="mt-2 flex items-center gap-1 text-[10px] text-slate-500">
+                              <span>{new Date(note.date).toLocaleDateString()}</span>
+                              {note.reminder && (
+                                  <span className="bg-red-100 text-red-600 px-1 rounded flex items-center gap-1">
+                                      <Calendar size={8}/> {note.reminder}
+                                  </span>
+                              )}
+                          </div>
+                      </div>
+                  ))}
+              </div>
 
-            {/* MENSAJES */}
-            <div className="flex-1 overflow-y-auto p-4 bg-[#e5ddd5] dark:bg-slate-950/50 space-y-3 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat">
-               {loadingMessages ? (
-                   <div className="flex justify-center py-10"><Loader2 className="animate-spin text-slate-400"/></div>
-               ) : (
-                   messages.map((msg, idx) => (
-                     <div key={msg.id.id} className={`flex ${msg.fromMe ? 'justify-end' : 'justify-start'}`}>
-                       <div className={`max-w-[70%] p-3 rounded-xl shadow-sm text-sm relative ${msg.fromMe ? 'bg-[#d9fdd3] dark:bg-emerald-700 text-slate-800 dark:text-white rounded-tr-none' : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-white rounded-tl-none'}`}>
-                         <p className="mb-3 leading-relaxed whitespace-pre-wrap">{msg.body}</p>
-                         <span className={`text-[9px] absolute bottom-1 right-2 ${msg.fromMe ? 'text-emerald-800 dark:text-emerald-200' : 'text-slate-400'}`}>
-                           {new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                         </span>
-                       </div>
-                     </div>
-                   ))
-               )}
-               <div ref={messagesEndRef} />
-            </div>
-
-            {/* INPUT PARA ESCRIBIR */}
-            <div className="p-3 bg-slate-50 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex gap-2">
-               <input 
-                 type="text" 
-                 className="flex-1 border border-slate-200 dark:border-slate-700 rounded-xl p-3 bg-white dark:bg-slate-800 text-slate-800 dark:text-white text-sm outline-none focus:border-emerald-500 transition-colors"
-                 placeholder="Escribe un mensaje..."
-                 value={messageInput}
-                 onChange={(e) => setMessageInput(e.target.value)}
-                 onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-               />
-               <button 
-                 onClick={sendMessage}
-                 disabled={!messageInput.trim()}
-                 className="bg-emerald-600 text-white px-4 rounded-xl hover:bg-emerald-700 disabled:opacity-50 transition-all shadow-md active:scale-95"
-               >
-                 <Send size={20}/>
-               </button>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center text-slate-300 dark:text-slate-600 p-10 text-center">
-            <MessageCircle size={64} strokeWidth={1} className="mb-4 opacity-50"/>
-            <p className="font-bold uppercase text-xs tracking-widest">Selecciona un chat para comenzar</p>
-            <p className="text-[10px] mt-2 max-w-xs text-slate-400">Conectado a SapiSoft WhatsApp Server (Ngrok)</p>
+              <div className="pt-4 border-t">
+                  <textarea 
+                    className="w-full border rounded p-2 text-sm mb-2" 
+                    placeholder="Nueva nota..."
+                    rows={2}
+                    value={newNote}
+                    onChange={e => setNewNote(e.target.value)}
+                  />
+                  <div className="flex gap-2 mb-2">
+                      <input 
+                        type="date" 
+                        className="border rounded p-1 text-xs flex-1"
+                        value={reminderDate}
+                        onChange={e => setReminderDate(e.target.value)}
+                      />
+                  </div>
+                  <button onClick={saveNote} className="w-full bg-orange-500 text-white py-2 rounded text-sm font-bold flex justify-center gap-2 hover:bg-orange-600">
+                      <Save size={16}/> Guardar Nota
+                  </button>
+              </div>
           </div>
-        )}
-      </div>
+      )}
     </div>
   );
-}
-
-function XCircleIcon({size}: {size:number}) {
-    return <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></svg>
 }
