@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Send, MessageCircle, User, Loader2, Users, FileText, Paperclip, Settings, PlusCircle, ArrowLeft, Trash2, CheckCircle, Image as ImageIcon, Briefcase, Edit3 } from 'lucide-react';
+import { Send, MessageCircle, User, Loader2, Users, FileText, Paperclip, Settings, PlusCircle, ArrowLeft, Trash2, Edit2, Save, Filter, Briefcase, Image as ImageIcon } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 
+// URL NGROK (¡Verifica que sea la actual!)
 const BACKEND_URL = 'https://irrespectively-excursional-alisson.ngrok-free.dev';
 const NOTIFICATION_SOUND = 'https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3';
 
 export default function WhatsAppModule({ clients }: { clients: any[] }) {
-  // --- ESTADOS ---
+  // ESTADOS
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState('DISCONNECTED');
   const [qrCode, setQrCode] = useState('');
@@ -20,17 +21,21 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
   const [messages, setMessages] = useState<any[]>([]);
   const [msgInput, setMsgInput] = useState("");
   const msgsEndRef = useRef<HTMLDivElement>(null);
+  
+  // FILTRO CHAT (NUEVO)
+  const [chatFilterStage, setChatFilterStage] = useState("Todos");
 
-  // CRM GLOBAL (Toda la DB para filtros)
+  // CRM
   const [fullCrmDb, setFullCrmDb] = useState<any>({ clients: {}, stages: [] });
-  const [crmClient, setCrmClient] = useState<any>(null); // Cliente actual seleccionado
-  
+  const [crmClient, setCrmClient] = useState<any>(null);
   const [stages, setStages] = useState<string[]>([]);
-  const [agents, setAgents] = useState<string[]>([]); // Lista de vendedores
-  
   const [newNote, setNewNote] = useState("");
+  const [isEditingAgent, setIsEditingAgent] = useState(false);
+
+  // CONFIG (RENOMBRAR)
   const [newStageName, setNewStageName] = useState("");
-  const [isEditingAgent, setIsEditingAgent] = useState(false); // Modo edición vendedor
+  const [editingStageIndex, setEditingStageIndex] = useState<number | null>(null);
+  const [tempStageName, setTempStageName] = useState("");
 
   // DIFUSIÓN
   const [bulkFilterStage, setBulkFilterStage] = useState("Todas");
@@ -45,33 +50,34 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
 
   const audioRef = useRef(new Audio(NOTIFICATION_SOUND));
 
-  // --- CONEXIÓN ---
+  // CONEXIÓN
   useEffect(() => {
     const skt = io(BACKEND_URL, { transports: ['websocket', 'polling'], extraHeaders: { "ngrok-skip-browser-warning": "true" } });
     setSocket(skt);
     skt.on('connect', () => setStatus('INITIALIZING'));
     skt.on('qr', (qr) => { setStatus('QR_READY'); setQrCode(qr); });
-    skt.on('ready', () => { 
-        setStatus('READY'); 
-        fetchChats(); 
-        fetchFullDb(); // Cargar todo el CRM para filtros
-    });
+    skt.on('ready', () => { setStatus('READY'); fetchChats(); fetchFullDb(); });
     skt.on('message', (msg) => { handleNewMsg(msg); audioRef.current.play().catch(()=>{}); });
     skt.on('message_create', (msg) => { if(msg.fromMe) handleNewMsg(msg); });
     skt.on('bulk_progress', setBulkProgress);
-    skt.on('bulk_complete', (res) => { setBulkProgress(null); alert(`✅ Enviados: ${res?.sent} | Errores: ${res?.errors}`); });
+    
+    // CORRECCIÓN: Resetear siempre el progreso al terminar
+    skt.on('bulk_complete', (res) => { 
+        setBulkProgress(null); 
+        alert(`✅ Proceso Finalizado.\nEnviados: ${res?.sent}\nErrores: ${res?.errors}`); 
+    });
+    
     return () => { skt.disconnect(); };
   }, []);
 
+  // API
   const api = async (path: string, opts?: any) => fetch(`${BACKEND_URL}${path}`, { ...opts, headers: { ...opts?.headers, "ngrok-skip-browser-warning": "true", 'Content-Type': 'application/json' } }).then(r => r.json());
 
   const fetchChats = () => api('/chats').then(setChats);
-  
   const fetchFullDb = async () => {
       const db = await api('/crm/all');
       setFullCrmDb(db);
       setStages(db.stages || []);
-      setAgents(db.agents || ["Admin"]);
   };
 
   const loadChat = async (id: string) => {
@@ -86,8 +92,10 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
 
   const handleNewMsg = (msg: any) => {
       setSelectedChatId(prev => {
-          const id = msg.fromMe ? msg.to : msg.from;
-          if(prev === id) { setMessages(m => [...m, msg]); setTimeout(()=>msgsEndRef.current?.scrollIntoView(), 100); }
+          if(prev === (msg.fromMe ? msg.to : msg.from)) {
+              setMessages(m => [...m, msg]);
+              setTimeout(()=>msgsEndRef.current?.scrollIntoView(), 100);
+          }
           return prev;
       });
       fetchChats();
@@ -99,20 +107,20 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
       setMsgInput("");
   };
 
-  // --- CRM ACTIONS ---
   const updateCrm = async (field: string, value: string) => {
       if(!selectedChatId) return;
       const phone = selectedChatId.replace(/\D/g, '');
       const res = await api('/crm/client', { method:'POST', body: JSON.stringify({ phone, [field]: value }) });
       setCrmClient(res.data);
-      if(field === 'agent') setIsEditingAgent(false); // Salir modo edición
-      // Actualizar DB global para que los filtros funcionen al instante
+      if(field === 'agent') setIsEditingAgent(false);
+      // Actualizar localmente para reflejar cambio inmediato en filtros
       setFullCrmDb((prev:any) => ({
           ...prev,
           clients: { ...prev.clients, [phone]: res.data }
       }));
   };
 
+  // --- CONFIG: STAGES ---
   const addStage = async () => {
       if(!newStageName) return;
       const updated = [...stages, newStageName];
@@ -120,8 +128,35 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
       await api('/crm/config', { method:'POST', body: JSON.stringify({ stages: updated }) });
       setNewStageName("");
   };
+  
+  const renameStage = async (oldName: string) => {
+      if(!tempStageName || tempStageName === oldName) { setEditingStageIndex(null); return; }
+      const res = await api('/crm/stage/rename', { method:'POST', body: JSON.stringify({ oldName, newName: tempStageName }) });
+      setStages(res.stages);
+      setFullCrmDb((prev:any) => { // Refrescar DB local para ver cambios en chats
+          const newClients = {...prev.clients};
+          Object.keys(newClients).forEach(k => { if(newClients[k].stage === oldName) newClients[k].stage = tempStageName; });
+          return { ...prev, clients: newClients };
+      });
+      setEditingStageIndex(null);
+  };
 
   // --- DIFUSIÓN ---
+  const sendBulk = () => {
+      // Forzar limpieza previa por seguridad
+      setBulkProgress(null);
+      
+      const manualList = manualNumbers.split(/[\n,]+/).map(n => n.trim()).filter(n => n.length >= 7);
+      const finalNumbers = [...new Set([...selectedBulkClients, ...manualList])];
+      if(finalNumbers.length === 0) return alert("Selecciona destinatarios");
+
+      if(confirm(`¿Enviar a ${finalNumbers.length} contactos?`)) {
+          // Inicializar estado de carga visualmente antes de enviar
+          setBulkProgress({ current: 0, total: finalNumbers.length, lastPhone: 'Iniciando...' });
+          socket?.emit('bulk_send', { numbers: finalNumbers, message: bulkMessage, media: bulkFile, minDelay, maxDelay, sendTogether });
+      }
+  };
+
   const handleFileUpload = (e: any) => {
       const file = e.target.files?.[0];
       if(file) {
@@ -131,44 +166,36 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
       }
   };
 
-  const sendBulk = () => {
-      const manualList = manualNumbers.split(/[\n,]+/).map(n => n.trim()).filter(n => n.length >= 7);
-      const finalNumbers = [...new Set([...selectedBulkClients, ...manualList])];
-      if(finalNumbers.length === 0) return alert("¡Ingresa números o selecciona clientes!");
+  // --- FILTROS ---
+  const filteredChatList = useMemo(() => {
+      if(chatFilterStage === "Todos") return chats;
+      return chats.filter(c => {
+          const phone = c.id.user;
+          const clientStage = fullCrmDb.clients[phone]?.stage || stages[0]; // Stage o el por defecto
+          return clientStage === chatFilterStage;
+      });
+  }, [chats, chatFilterStage, fullCrmDb, stages]);
 
-      if(confirm(`¿Enviar a ${finalNumbers.length} contactos?\n(El sistema agregará prefijo 51 si falta)`)) {
-          socket?.emit('bulk_send', { numbers: finalNumbers, message: bulkMessage, media: bulkFile, minDelay, maxDelay, sendTogether });
-      }
-  };
-
-  // --- FILTRO PODEROSO ---
   const filteredBulkList = useMemo(() => {
-      // 1. Obtenemos lista base (de Chats recientes + SapiSoft clients)
-      // *Truco:* Usamos los chats recientes como fuente principal de "contactos" para el CRM
       const allPhones = new Set([...chats.map(c => c.id.user), ...clients.map(c => c.phone)]);
-      
       return Array.from(allPhones).map(phone => {
-          // Buscar datos en CRM Global
           const crmInfo = fullCrmDb.clients[phone] || {};
           const name = clients.find(c=>c.phone === phone)?.name || chats.find(c=>c.id.user === phone)?.name || phone;
           return { phone, name, stage: crmInfo.stage || stages[0] };
-      }).filter(c => {
-          if(bulkFilterStage === "Todas") return true;
-          return c.stage === bulkFilterStage;
-      });
+      }).filter(c => bulkFilterStage === "Todas" || c.stage === bulkFilterStage);
   }, [chats, clients, fullCrmDb, bulkFilterStage, stages]);
 
 
   // RENDER
-  if(status !== 'READY') return <div className="flex flex-col items-center justify-center h-screen bg-slate-100 font-bold text-slate-500"><Loader2 className="animate-spin mb-4" size={48}/>Cargando CRM...</div>;
+  if(status !== 'READY') return <div className="flex flex-col items-center justify-center h-screen bg-slate-100 font-bold text-slate-500"><Loader2 className="animate-spin mb-4" size={48}/>Conectando...</div>;
 
   return (
-    <div className="flex h-screen bg-white relative overflow-hidden text-slate-800">
+    <div className="flex h-screen bg-white overflow-hidden text-slate-800 font-sans">
       
       {/* SIDEBAR */}
       <div className={`flex flex-col bg-slate-50 border-r ${showMobileChat ? 'hidden md:flex md:w-80' : 'w-full md:w-80'}`}>
           <div className="p-3 bg-emerald-600 text-white flex justify-between items-center shadow">
-              <span className="font-bold flex gap-2"><MessageCircle/> SapiSoft CRM</span>
+              <span className="font-bold flex gap-2"><MessageCircle/> SapiSoft</span>
           </div>
           
           <div className="flex text-[10px] font-bold border-b bg-white">
@@ -178,35 +205,49 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
           </div>
 
           <div className="flex-1 overflow-y-auto">
-              {activeTab === 'CHAT' && chats.map(c => (
-                  <div key={c.id._serialized} onClick={() => loadChat(c.id._serialized)} className={`p-3 border-b cursor-pointer hover:bg-slate-100 ${selectedChatId===c.id._serialized?'bg-emerald-50':''}`}>
-                      <div className="flex justify-between">
-                          <span className="font-bold text-sm truncate w-32">{c.name || c.id.user}</span>
-                          <span className="text-[10px] text-slate-400">{new Date(c.timestamp*1000).toLocaleDateString()}</span>
-                      </div>
-                      <div className="flex justify-between items-center mt-1">
-                          <span className="text-xs text-slate-500 truncate w-32">{c.lastMessage?.body || '📎 Adjunto'}</span>
-                          {/* Etiqueta CRM pequeña */}
-                          {fullCrmDb.clients[c.id.user]?.stage && (
-                              <span className="text-[9px] px-1 bg-blue-100 text-blue-700 rounded border border-blue-200">
-                                  {fullCrmDb.clients[c.id.user].stage}
-                              </span>
-                          )}
-                      </div>
-                  </div>
-              ))}
+              {/* LISTA DE CHATS CON FILTRO */}
+              {activeTab === 'CHAT' && (
+                  <>
+                    <div className="p-2 bg-slate-100 border-b">
+                        <div className="flex items-center gap-2 bg-white rounded border p-1">
+                            <Filter size={14} className="text-slate-400"/>
+                            <select className="w-full text-xs outline-none bg-transparent" value={chatFilterStage} onChange={e=>setChatFilterStage(e.target.value)}>
+                                <option value="Todos">Todos los Chats</option>
+                                {stages.map(s => <option key={s} value={s}>{s}</option>)}
+                            </select>
+                        </div>
+                    </div>
+                    {filteredChatList.length === 0 && <div className="p-4 text-center text-xs text-slate-400">No hay chats en esta etapa</div>}
+                    {filteredChatList.map(c => (
+                        <div key={c.id._serialized} onClick={() => loadChat(c.id._serialized)} className={`p-3 border-b cursor-pointer hover:bg-slate-100 ${selectedChatId===c.id._serialized?'bg-emerald-50':''}`}>
+                            <div className="flex justify-between">
+                                <span className="font-bold text-sm truncate w-32">{c.name || c.id.user}</span>
+                                <span className="text-[10px] text-slate-400">{new Date(c.timestamp*1000).toLocaleDateString()}</span>
+                            </div>
+                            <div className="flex justify-between items-center mt-1">
+                                <span className="text-xs text-slate-500 truncate w-32">{c.lastMessage?.body || '📎 Adjunto'}</span>
+                                {fullCrmDb.clients[c.id.user]?.stage && (
+                                    <span className="text-[9px] px-1 bg-blue-100 text-blue-700 rounded border border-blue-200">
+                                        {fullCrmDb.clients[c.id.user].stage}
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                  </>
+              )}
 
+              {/* DIFUSIÓN */}
               {activeTab === 'BULK' && (
                   <div className="p-2 space-y-3">
                       <div className="bg-white p-2 rounded border">
-                          <label className="text-xs font-bold block mb-1">Filtrar por Etapa de Venta</label>
+                          <label className="text-xs font-bold block mb-1">Filtrar por Etapa CRM</label>
                           <select className="w-full border text-xs p-1 rounded" value={bulkFilterStage} onChange={e=>setBulkFilterStage(e.target.value)}>
                               <option value="Todas">Todas las Etapas</option>
                               {stages.map(s=><option key={s} value={s}>{s}</option>)}
                           </select>
                           <div className="text-[10px] mt-1 text-blue-600 font-bold">Encontrados: {filteredBulkList.length}</div>
                       </div>
-
                       <div className="max-h-60 overflow-y-auto border rounded bg-white">
                           {filteredBulkList.map((c:any, i:number) => (
                               <div key={i} className="flex gap-2 items-center p-2 border-b hover:bg-slate-50">
@@ -215,27 +256,23 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
                                   }}/>
                                   <div className="text-xs">
                                       <div className="font-bold">{c.name}</div>
-                                      <div className="flex gap-1">
-                                          <span className="text-slate-400">{c.phone}</span>
-                                          <span className="bg-slate-100 px-1 rounded">{c.stage}</span>
-                                      </div>
+                                      <span className="bg-slate-100 px-1 rounded text-[9px]">{c.stage}</span>
                                   </div>
                               </div>
                           ))}
                       </div>
-
                       <div className="bg-white p-2 rounded border">
                           <label className="text-xs font-bold block mb-1">Números Manuales</label>
-                          <textarea className="w-full border text-xs p-1 rounded font-mono" rows={3} placeholder="999888777, 955444333" value={manualNumbers} onChange={e=>setManualNumbers(e.target.value)}/>
-                          <p className="text-[9px] text-slate-400">Prefijo 51 se agrega automático.</p>
+                          <textarea className="w-full border text-xs p-1 rounded font-mono" rows={3} placeholder="999888777..." value={manualNumbers} onChange={e=>setManualNumbers(e.target.value)}/>
                       </div>
                   </div>
               )}
 
+              {/* CONFIGURACIÓN (RENOMBRAR) */}
               {activeTab === 'CONFIG' && (
                   <div className="p-4 space-y-4">
                       <div>
-                          <h3 className="font-bold text-sm text-slate-700 mb-2">Administrar Etapas</h3>
+                          <h3 className="font-bold text-sm text-slate-700 mb-2">Editor de Etapas</h3>
                           <div className="flex gap-2 mb-2">
                               <input className="flex-1 border p-1 text-sm rounded" placeholder="Nueva etapa..." value={newStageName} onChange={e=>setNewStageName(e.target.value)}/>
                               <button onClick={addStage} className="bg-emerald-600 text-white p-1 rounded"><PlusCircle size={18}/></button>
@@ -243,11 +280,24 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
                           <div className="space-y-1">
                               {stages.map((s, i) => (
                                   <div key={i} className="flex justify-between items-center bg-white p-2 rounded border text-sm">
-                                      <span>{s}</span>
-                                      <button className="text-red-500"><Trash2 size={14}/></button>
+                                      {editingStageIndex === i ? (
+                                          <div className="flex gap-1 w-full">
+                                              <input className="flex-1 border p-1 text-xs" autoFocus defaultValue={s} onChange={(e)=>setTempStageName(e.target.value)}/>
+                                              <button onClick={()=>renameStage(s)} className="text-green-600"><Save size={14}/></button>
+                                          </div>
+                                      ) : (
+                                          <>
+                                            <span>{s}</span>
+                                            <div className="flex gap-2">
+                                                <button onClick={()=>{setEditingStageIndex(i); setTempStageName(s);}} className="text-blue-500"><Edit2 size={14}/></button>
+                                                <button className="text-slate-300 cursor-not-allowed"><Trash2 size={14}/></button>
+                                            </div>
+                                          </>
+                                      )}
                                   </div>
                               ))}
                           </div>
+                          <p className="text-[10px] text-slate-400 mt-2">Nota: Al renombrar una etapa, se actualiza automáticamente en todos los clientes que la tengan.</p>
                       </div>
                   </div>
               )}
@@ -259,18 +309,18 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
           {activeTab === 'BULK' ? (
               <div className="flex-1 overflow-y-auto p-4 flex justify-center">
                   <div className="bg-white w-full max-w-lg p-6 rounded shadow h-fit">
-                      <h2 className="text-lg font-bold text-blue-600 flex gap-2 mb-4"><Users/> Enviar Difusión</h2>
-                      
+                      <h2 className="text-lg font-bold text-blue-600 flex gap-2 mb-4"><Users/> Difusión Masiva</h2>
                       {bulkProgress ? (
                            <div className="text-center py-10">
                                <Loader2 className="animate-spin mx-auto text-blue-500 mb-2" size={40}/>
                                <div className="text-3xl font-bold">{bulkProgress.current} / {bulkProgress.total}</div>
+                               <p className="text-slate-500 text-sm">Enviando a: {bulkProgress.lastPhone}</p>
                            </div>
                       ) : (
                           <>
                             <div className="flex gap-4 mb-4 bg-slate-50 p-2 rounded border">
-                                <div className="flex-1"><label className="text-[10px] font-bold">Min (s)</label><input type="number" className="w-full border rounded" value={minDelay} onChange={e=>setMinDelay(Number(e.target.value))}/></div>
-                                <div className="flex-1"><label className="text-[10px] font-bold">Max (s)</label><input type="number" className="w-full border rounded" value={maxDelay} onChange={e=>setMaxDelay(Number(e.target.value))}/></div>
+                                <div className="flex-1"><label className="text-[10px] font-bold">Min Delay (s)</label><input type="number" className="w-full border rounded" value={minDelay} onChange={e=>setMinDelay(Number(e.target.value))}/></div>
+                                <div className="flex-1"><label className="text-[10px] font-bold">Max Delay (s)</label><input type="number" className="w-full border rounded" value={maxDelay} onChange={e=>setMaxDelay(Number(e.target.value))}/></div>
                             </div>
                             <textarea className="w-full border p-3 rounded mb-3" rows={4} placeholder="Mensaje..." value={bulkMessage} onChange={e=>setBulkMessage(e.target.value)}/>
                             
@@ -287,9 +337,7 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
                                     </label>
                                 )}
                             </div>
-                            <button onClick={sendBulk} className="w-full bg-blue-600 text-white py-3 rounded font-bold shadow hover:bg-blue-700">
-                                ENVIAR A {new Set([...selectedBulkClients, ...manualNumbers.split(/[\n,]+/).filter(n=>n.trim().length>6)]).size}
-                            </button>
+                            <button onClick={sendBulk} className="w-full bg-blue-600 text-white py-3 rounded font-bold shadow hover:bg-blue-700">ENVIAR AHORA</button>
                           </>
                       )}
                   </div>
@@ -299,9 +347,8 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
                 <div className="p-2 bg-slate-100 border-b flex justify-between items-center shadow-sm">
                     <div className="flex items-center gap-2">
                         <button onClick={()=>setShowMobileChat(false)} className="md:hidden p-1 bg-white rounded-full"><ArrowLeft size={16}/></button>
-                        <span className="font-bold text-slate-800 truncate max-w-[120px]">{chats.find(c=>c.id._serialized===selectedChatId)?.name}</span>
+                        <span className="font-bold text-slate-800 truncate max-w-[150px]">{chats.find(c=>c.id._serialized===selectedChatId)?.name}</span>
                     </div>
-                    {/* SELECTOR RÁPIDO DE ETAPA */}
                     {crmClient && (
                         <select className="text-xs border rounded p-1 bg-white text-emerald-700 font-bold outline-none" 
                                 value={crmClient.stage} 
@@ -336,32 +383,24 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
           )}
       </div>
 
-      {/* CRM PANEL (DERECHA) */}
+      {/* CRM PANEL */}
       {selectedChatId && crmClient && activeTab === 'CHAT' && (
           <div className="hidden md:flex w-72 bg-white border-l flex-col shadow-xl z-20">
               <div className="p-4 bg-slate-50 border-b">
-                  <h3 className="font-bold text-slate-700 flex gap-2 items-center"><User size={16}/> Ficha Cliente</h3>
+                  <h3 className="font-bold text-slate-700 flex gap-2 items-center"><User size={16}/> Cliente</h3>
               </div>
-              
               <div className="p-4 flex-1 overflow-y-auto space-y-4">
-                  {/* ASIGNACIÓN DE VENDEDOR */}
                   <div className="bg-blue-50 p-2 rounded border border-blue-100">
                       <label className="text-[10px] font-bold text-slate-500 uppercase flex justify-between">
                           Atendido por:
-                          <button onClick={()=>setIsEditingAgent(!isEditingAgent)} className="text-blue-600"><Edit3 size={12}/></button>
+                          <button onClick={()=>setIsEditingAgent(!isEditingAgent)} className="text-blue-600"><Edit2 size={12}/></button>
                       </label>
                       {isEditingAgent ? (
-                          <div className="flex gap-1 mt-1">
-                              <input className="w-full text-xs border p-1 rounded" defaultValue={crmClient.agent} onBlur={(e)=>updateCrm('agent', e.target.value)} autoFocus/>
-                          </div>
+                          <input className="w-full text-xs border p-1 rounded mt-1" defaultValue={crmClient.agent} onBlur={(e)=>updateCrm('agent', e.target.value)} autoFocus/>
                       ) : (
-                          <div className="font-bold text-blue-800 text-sm flex gap-2 items-center mt-1">
-                              <Briefcase size={12}/> {crmClient.agent}
-                          </div>
+                          <div className="font-bold text-blue-800 text-sm flex gap-2 items-center mt-1"><Briefcase size={12}/> {crmClient.agent}</div>
                       )}
                   </div>
-
-                  {/* NOTAS */}
                   <div>
                       <label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Historial</label>
                       <div className="space-y-2 max-h-60 overflow-y-auto">
@@ -374,7 +413,6 @@ export default function WhatsAppModule({ clients }: { clients: any[] }) {
                       </div>
                   </div>
               </div>
-
               <div className="p-3 border-t bg-slate-50">
                   <textarea className="w-full border text-xs p-2 rounded mb-2" rows={2} placeholder="Nueva nota..." value={newNote} onChange={e=>setNewNote(e.target.value)}/>
                   <button onClick={()=>updateCrm('note', newNote).then(()=>setNewNote(""))} className="w-full bg-slate-800 text-white text-xs py-2 rounded">Guardar Nota</button>
