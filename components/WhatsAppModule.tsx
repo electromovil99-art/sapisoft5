@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Phone, User, MessageCircle, RefreshCw, Loader2, QrCode, LogOut } from 'lucide-react';
 import { io, Socket } from 'socket.io-client';
@@ -34,10 +33,11 @@ interface Chat {
 interface Props {
   products: any[];
   clients: any[];
-  chats: any[]; // Kept for prop compatibility, though we manage local state mostly
+  chats: any[]; 
   setChats: (chats: any[]) => void;
 }
 
+// TU URL DE NGROK (Ya configurada correctamente)
 const BACKEND_URL = 'https://irrespectively-excursional-alisson.ngrok-free.dev';
 
 export default function WhatsAppModule({ clients }: Props) {
@@ -51,9 +51,14 @@ export default function WhatsAppModule({ clients }: Props) {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Initialize Socket.IO connection
+  // 1. CONEXIÓN SOCKET (MODIFICADO: Agregamos extraHeaders)
   useEffect(() => {
-    const newSocket = io(BACKEND_URL);
+    const newSocket = io(BACKEND_URL, {
+        transports: ['websocket', 'polling'],
+        extraHeaders: {
+            "ngrok-skip-browser-warning": "true" // <--- LA LLAVE MAESTRA
+        }
+    });
     setSocket(newSocket);
 
     return () => {
@@ -95,7 +100,6 @@ export default function WhatsAppModule({ clients }: Props) {
     });
     
     socket.on('message_create', (message: Message) => {
-       // Handle own messages sent from other devices
        if(message.fromMe) handleIncomingMessage(message);
     });
 
@@ -115,10 +119,12 @@ export default function WhatsAppModule({ clients }: Props) {
     };
   }, [socket]);
 
-  // Fetch Chats
+  // 2. FETCH CHATS (MODIFICADO: Agregamos headers)
   const fetchChats = async () => {
     try {
-      const res = await fetch(`${BACKEND_URL}/chats`);
+      const res = await fetch(`${BACKEND_URL}/chats`, {
+          headers: { "ngrok-skip-browser-warning": "true" } // <--- LLAVE MAESTRA
+      });
       const data = await res.json();
       setChats(data);
     } catch (error) {
@@ -126,18 +132,14 @@ export default function WhatsAppModule({ clients }: Props) {
     }
   };
 
-  // Handle Incoming Messages (Update Chat List & Active Conversation)
   const handleIncomingMessage = (message: Message) => {
-    // Determine chat ID (if from me, it's 'to', else it's 'from')
     const chatId = message.fromMe ? message.to : message.from;
 
-    // Update active conversation if selected
     if (selectedChatId === chatId) {
       setMessages((prev) => [...prev, message]);
       scrollToBottom();
     }
 
-    // Update Chat List (Move to top, update last message)
     setChats((prevChats) => {
       const chatIndex = prevChats.findIndex(c => c.id._serialized === chatId);
       if (chatIndex > -1) {
@@ -151,15 +153,17 @@ export default function WhatsAppModule({ clients }: Props) {
         newChats.splice(chatIndex, 1);
         return [updatedChat, ...newChats];
       }
-      return prevChats; // If new chat, we might need to re-fetch or handle separately
+      return prevChats;
     });
   };
 
-  // Fetch Messages for Selected Chat
+  // 3. FETCH MESSAGES (MODIFICADO: Agregamos headers)
   useEffect(() => {
     if (!selectedChatId) return;
     setLoadingMessages(true);
-    fetch(`${BACKEND_URL}/chats/${selectedChatId}/messages`)
+    fetch(`${BACKEND_URL}/chats/${selectedChatId}/messages`, {
+        headers: { "ngrok-skip-browser-warning": "true" } // <--- LLAVE MAESTRA
+    })
       .then(res => res.json())
       .then(data => {
         setMessages(data);
@@ -178,13 +182,17 @@ export default function WhatsAppModule({ clients }: Props) {
     }, 100);
   };
 
+  // 4. SEND MESSAGE (MODIFICADO: Agregamos headers)
   const sendMessage = async () => {
     if (!selectedChatId || !messageInput.trim()) return;
 
     try {
       const response = await fetch(`${BACKEND_URL}/messages`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+            'Content-Type': 'application/json',
+            "ngrok-skip-browser-warning": "true" // <--- LLAVE MAESTRA
+        },
         body: JSON.stringify({
           chatId: selectedChatId,
           content: messageInput
@@ -193,8 +201,6 @@ export default function WhatsAppModule({ clients }: Props) {
       
       if (response.ok) {
         setMessageInput("");
-        // Optimistic update is handled by 'message_create' event usually, 
-        // but we can also manually add it here if latency is high.
       }
     } catch (error) {
       console.error("Error sending message:", error);
@@ -202,20 +208,22 @@ export default function WhatsAppModule({ clients }: Props) {
     }
   };
 
+  // 5. LOGOUT (MODIFICADO: Agregamos headers)
   const handleLogout = async () => {
       try {
-          await fetch(`${BACKEND_URL}/logout`, { method: 'POST' });
+          await fetch(`${BACKEND_URL}/logout`, { 
+              method: 'POST',
+              headers: { "ngrok-skip-browser-warning": "true" } // <--- LLAVE MAESTRA
+          });
           setStatus('DISCONNECTED');
           setQrCode('');
           setChats([]);
           setSelectedChatId(null);
-          // Socket logic will likely handle the rest via events or reconnection attempts
       } catch (error) {
           console.error("Logout failed", error);
       }
   };
 
-  // Helper to get contact name from local clients list or chat name
   const getChatName = (chat: Chat) => {
       if (!chat) return "Desconocido";
       const number = chat.id._serialized.replace('@c.us', '');
@@ -249,7 +257,7 @@ export default function WhatsAppModule({ clients }: Props) {
                     <>
                         <Loader2 className="animate-spin text-emerald-600" size={32} />
                         <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Conectando con el servidor...</p>
-                        <p className="text-[10px] text-slate-400">Asegúrate que el backend (puerto 3000) esté corriendo.</p>
+                        <p className="text-[10px] text-slate-400">Asegúrate que el backend (puerto 3000) y Ngrok estén corriendo.</p>
                     </>
                 )}
             </div>
@@ -350,7 +358,7 @@ export default function WhatsAppModule({ clients }: Props) {
           <div className="flex-1 flex flex-col items-center justify-center text-slate-300 dark:text-slate-600 p-10 text-center">
             <MessageCircle size={64} strokeWidth={1} className="mb-4 opacity-50"/>
             <p className="font-bold uppercase text-xs tracking-widest">Selecciona un chat para comenzar</p>
-            <p className="text-[10px] mt-2 max-w-xs text-slate-400">Conectado a SapiSoft WhatsApp Server (Localhost:3000)</p>
+            <p className="text-[10px] mt-2 max-w-xs text-slate-400">Conectado a SapiSoft WhatsApp Server (Ngrok)</p>
           </div>
         )}
       </div>
