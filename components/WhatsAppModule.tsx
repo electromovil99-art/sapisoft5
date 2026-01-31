@@ -8,33 +8,35 @@ const BACKEND_URL = 'https://irrespectively-excursional-alisson.ngrok-free.dev';
 const NOTIFICATION_SOUND = 'https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3';
 
 export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
+  // --- ESTADOS DE SISTEMA ---
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState('DISCONNECTED');
   const [qrCode, setQrCode] = useState('');
   const [activeTab, setActiveTab] = useState<'CHAT' | 'BULK' | 'CONFIG'>('CHAT');
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+
+  // --- ESTADOS DE DATOS ---
   const [chats, setChats] = useState<any[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [msgInput, setMsgInput] = useState("");
-  const msgsEndRef = useRef<HTMLDivElement>(null);
-  const [chatFilterStage, setChatFilterStage] = useState("Todos");
-  
   const [fullCrmDb, setFullCrmDb] = useState<any>({ clients: {}, stages: [], labels: [] });
   const [crmClient, setCrmClient] = useState<any>(null);
   const [stages, setStages] = useState<string[]>([]);
   const [labels, setLabels] = useState<string[]>([]);
   
+  // --- ESTADOS DE EDICIÓN ---
   const [newNote, setNewNote] = useState("");
   const [isEditingAgent, setIsEditingAgent] = useState(false);
   const [newStageName, setNewStageName] = useState("");
-  const [newLabelName, setNewLabelName] = useState(""); 
+  const [newLabelName, setNewLabelName] = useState("");
   const [editingStageIndex, setEditingStageIndex] = useState<number | null>(null);
   const [tempStageName, setTempStageName] = useState("");
-  
+
+  // --- ESTADOS DE DIFUSIÓN (BULK) ---
   const [bulkFilterStage, setBulkFilterStage] = useState("Todas");
-  const [bulkFilterLabel, setBulkFilterLabel] = useState("Todas"); 
+  const [bulkFilterLabel, setBulkFilterLabel] = useState("Todas");
   const [selectedBulkClients, setSelectedBulkClients] = useState<string[]>([]);
   const [manualNumbers, setManualNumbers] = useState("");
   const [bulkMessage, setBulkMessage] = useState("");
@@ -43,283 +45,359 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
   const [sendTogether, setSendTogether] = useState(true);
   const [minDelay, setMinDelay] = useState(4);
   const [maxDelay, setMaxDelay] = useState(8);
-  
+
+  // --- ESTADOS DE REENVÍO ---
   const [forwardModalOpen, setForwardModalOpen] = useState(false);
   const [msgToForward, setMsgToForward] = useState<any>(null);
   const [forwardSearch, setForwardSearch] = useState("");
 
+  const msgsEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  useEffect(() => { if (typeof window !== 'undefined') { audioRef.current = new Audio(NOTIFICATION_SOUND); } }, []);
+
+  // --- EFECTOS ---
+  useEffect(() => {
+    if (typeof window !== 'undefined') audioRef.current = new Audio(NOTIFICATION_SOUND);
+  }, []);
 
   useEffect(() => {
-    const skt = io(BACKEND_URL, { transports: ['websocket', 'polling'], extraHeaders: { "ngrok-skip-browser-warning": "true" } });
+    const skt = io(BACKEND_URL, { 
+      transports: ['websocket', 'polling'], 
+      extraHeaders: { "ngrok-skip-browser-warning": "true" } 
+    });
     setSocket(skt);
+
     skt.on('connect', () => setStatus('INITIALIZING'));
     skt.on('qr', (qr) => { setStatus('QR_READY'); setQrCode(qr); });
-    skt.on('ready', () => { setStatus('READY'); fetchChats(); fetchFullDb(); });
-    skt.on('message', (msg) => { handleNewMsg(msg); audioRef.current?.play().catch(() => {}); });
-    skt.on('message_create', (msg) => { if(msg.fromMe) handleNewMsg(msg); });
+    skt.on('ready', () => { setStatus('READY'); refreshData(); });
+    skt.on('message', (msg) => { 
+        handleIncomingMessage(msg);
+        audioRef.current?.play().catch(() => {});
+    });
+    skt.on('message_create', (msg) => { if(msg.fromMe) handleIncomingMessage(msg); });
     skt.on('bulk_progress', setBulkProgress);
-    skt.on('bulk_complete', (res) => { setBulkProgress(null); alert(`✅ FINALIZADO.\nEnviados: ${res?.sent}\nErrores: ${res?.errors}`); });
+    skt.on('bulk_complete', (res) => { 
+        setBulkProgress(null); 
+        alert(`Difusión Finalizada con éxito.`); 
+    });
+
     return () => { skt.disconnect(); };
   }, []);
 
-  const api = async (path: string, opts?: any) => {
+  // --- LÓGICA DE API ---
+  const apiCall = async (path: string, method = 'GET', body?: any) => {
     try {
-      const response = await fetch(`${BACKEND_URL}${path}`, { ...opts, headers: { ...opts?.headers, "ngrok-skip-browser-warning": "true", 'Content-Type': 'application/json' } });
-      return response.json();
-    } catch (e) { return null; }
+      const options: any = {
+        method,
+        headers: { "ngrok-skip-browser-warning": "true", 'Content-Type': 'application/json' }
+      };
+      if (body) options.body = JSON.stringify(body);
+      const res = await fetch(`${BACKEND_URL}${path}`, options);
+      return await res.json();
+    } catch (e) {
+      console.error("API Error:", e);
+      return null;
+    }
   };
 
-  const fetchChats = () => api('/chats').then(data => setChats(Array.isArray(data) ? data : []));
-  const fetchFullDb = async () => { 
-      const db = await api('/crm/all'); 
-      if(db) { setFullCrmDb(db); setStages(db.stages || []); setLabels(db.labels || []); }
+  const refreshData = async () => {
+    const [chatsData, dbData] = await Promise.all([ apiCall('/chats'), apiCall('/crm/all') ]);
+    if (Array.isArray(chatsData)) setChats(chatsData);
+    if (dbData) {
+      setFullCrmDb(dbData);
+      setStages(dbData.stages || []);
+      setLabels(dbData.labels || []);
+    }
   };
 
   const loadChat = async (id: string) => {
-      setSelectedChatId(id); setShowMobileChat(true);
-      const data = await api(`/chats/${id}/messages`);
-      if(data) setMessages(data);
-      setTimeout(()=>msgsEndRef.current?.scrollIntoView({ behavior: "smooth" }), 200);
-      const phone = id.replace(/\D/g, '');
-      const clientRes = await api(`/crm/client/${phone}`);
-      if(clientRes) setCrmClient(clientRes);
+    setSelectedChatId(id);
+    setShowMobileChat(true);
+    const msgs = await apiCall(`/chats/${id}/messages`);
+    if (msgs) setMessages(msgs);
+    const phone = id.replace(/\D/g, '');
+    const client = await apiCall(`/crm/client/${phone}`);
+    if (client) setCrmClient(client);
+    setTimeout(() => msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 300);
   };
 
-  const handleNewMsg = (msg: any) => {
-      setSelectedChatId(prev => {
-          if(prev === (msg.fromMe ? msg.to : msg.from)) { 
-              if(msg.hasMedia) setTimeout(() => loadChat(prev), 1500); 
-              else { setMessages(m => [...m, msg]); setTimeout(()=>msgsEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); }
-          }
-          return prev;
-      });
-      fetchChats();
+  const handleIncomingMessage = (msg: any) => {
+    const currentChat = msg.fromMe ? msg.to : msg.from;
+    if (selectedChatId === currentChat) {
+      if (msg.hasMedia) setTimeout(() => loadChat(selectedChatId), 1500);
+      else setMessages(prev => [...prev, msg]);
+      setTimeout(() => msgsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    }
+    refreshData();
   };
 
-  const sendMessage = async (chatId = selectedChatId, content = msgInput) => {
-      if(!content.trim() || !chatId) return;
-      await api('/messages', { method:'POST', body: JSON.stringify({ chatId, content }) });
-      if(chatId === selectedChatId) setMsgInput("");
-  };
-
-  const handleForward = async (targetChatId: string) => {
-      if(!msgToForward) return;
-      if(msgToForward.body) await sendMessage(targetChatId, msgToForward.body);
-      else alert("Solo se puede reenviar texto por ahora.");
-      setForwardModalOpen(false);
-  };
-
-  const handleExcelUpload = (e: any) => {
-      const file = e.target.files[0];
-      if(!file) return;
-      const reader = new FileReader();
-      reader.onload = (evt: any) => {
-          const bstr = evt.target.result;
-          const wb = XLSX.read(bstr, { type: 'binary' });
-          const wsname = wb.SheetNames[0];
-          const ws = wb.Sheets[wsname];
-          const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
-          const numbers = data.map((row) => row[0]).filter((n) => n && n.toString().length > 6);
-          setManualNumbers(prev => (prev ? prev + ", " : "") + numbers.join(", "));
-          alert(`✅ Importados ${numbers.length} números`);
-      };
-      reader.readAsBinaryString(file);
+  // --- LÓGICA DE NEGOCIO ---
+  const handleExcelImport = (e: any) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (evt: any) => {
+      const wb = XLSX.read(evt.target.result, { type: 'binary' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const data: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      const found = data.map(r => r[0]).filter(n => n && n.toString().length > 7);
+      setManualNumbers(prev => (prev ? prev + ", " : "") + found.join(", "));
+    };
+    reader.readAsBinaryString(file);
   };
 
   const handleFileUpload = (e: any) => {
-      const file = e.target.files?.[0];
-      if(file) {
-          const reader = new FileReader();
-          reader.readAsDataURL(file);
-          reader.onloadend = () => setBulkFile({ data: (reader.result as string).split(',')[1], mimetype: file.type, filename: file.name });
-      }
+    const file = e.target.files?.[0];
+    if(file) {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onloadend = () => setBulkFile({ data: (reader.result as string).split(',')[1], mimetype: file.type, filename: file.name });
+    }
   };
-
-  const filteredChatList = useMemo(() => {
-      if (!Array.isArray(chats)) return [];
-      return chats.filter(c => {
-          const phone = c.id?.user || "";
-          const stage = fullCrmDb.clients?.[phone]?.stage || stages[0] || "Nuevo";
-          const matchesStage = chatFilterStage === "Todos" || stage === chatFilterStage;
-          const matchesSearch = String(c.name || "").toLowerCase().includes(searchTerm.toLowerCase()) || phone.includes(searchTerm);
-          return matchesStage && matchesSearch;
-      });
-  }, [chats, chatFilterStage, fullCrmDb, stages, searchTerm]);
-
-  const filteredBulkList = useMemo(() => {
-      const allPhones = new Set([...chats.map(c => c.id?.user), ...(clients || []).map(c => c.phone)].filter(Boolean));
-      let list = Array.from(allPhones).map(phone => {
-          const crmInfo = fullCrmDb.clients?.[phone] || {};
-          const name = clients?.find(c=>c.phone === phone)?.name || chats.find(c=>c.id?.user === phone)?.name || phone;
-          return { phone, name, stage: crmInfo.stage || stages[0] || "Nuevo", labels: crmInfo.labels || [] };
-      });
-      if(bulkFilterStage !== "Todas") list = list.filter(c => c.stage === bulkFilterStage);
-      if(bulkFilterLabel !== "Todas") list = list.filter(c => Array.isArray(c.labels) && c.labels.includes(bulkFilterLabel));
-      if(searchTerm) list = list.filter(c => String(c.name || "").toLowerCase().includes(searchTerm.toLowerCase()) || String(c.phone || "").includes(searchTerm));
-      return list;
-  }, [chats, clients, fullCrmDb, bulkFilterStage, bulkFilterLabel, stages, searchTerm]);
 
   const updateCrm = async (field: string, value: any) => {
-      if(!selectedChatId) return;
-      const phone = selectedChatId.replace(/\D/g, '');
-      const res = await api('/crm/client', { method:'POST', body: JSON.stringify({ phone, [field]: value }) });
-      if(res?.data) { setCrmClient(res.data); setFullCrmDb((prev:any) => ({ ...prev, clients: { ...prev.clients, [phone]: res.data } })); }
-      if(field === 'agent') setIsEditingAgent(false);
+    if(!selectedChatId) return;
+    const phone = selectedChatId.replace(/\D/g, '');
+    const res = await apiCall('/crm/client', 'POST', { phone, [field]: value });
+    if (res?.data) {
+      setCrmClient(res.data);
+      setFullCrmDb((prev:any) => ({ ...prev, clients: { ...prev.clients, [phone]: res.data } }));
+    }
+    if(field === 'agent') setIsEditingAgent(false);
   };
 
-  const addLabel = async () => { if(newLabelName){ const u = [...labels, newLabelName]; setLabels(u); await api('/crm/labels/update', { method:'POST', body: JSON.stringify({ labels: u }) }); setNewLabelName(""); } };
-  const addStage = async () => { if(newStageName) { const u = [...stages, newStageName]; setStages(u); await api('/crm/config', { method:'POST', body: JSON.stringify({ stages: u }) }); setNewStageName(""); } };
+  const handleRenameStage = async (oldName: string) => {
+    if(!tempStageName || tempStageName === oldName) { setEditingStageIndex(null); return; }
+    await apiCall('/crm/stage/rename', 'POST', { oldName, newName: tempStageName });
+    setEditingStageIndex(null);
+    refreshData();
+  };
 
-  const renderMessageContent = (m: any) => {
-      const isMedia = m.hasMedia || m.type === 'image' || m.type === 'video';
-      const mediaSrc = m.mediaData ? `data:${m.mimetype};base64,${m.mediaData}` : null;
-      return (
-          <div className={`max-w-[85%] md:max-w-[60%] p-2 rounded-lg text-sm shadow relative break-words flex flex-col gap-1 group ${m.fromMe?'bg-[#d9fdd3] rounded-tr-none':'bg-white rounded-tl-none'}`}>
-              <div className="flex absolute -top-2 -right-2 bg-white rounded-full shadow p-1 cursor-pointer z-10" onClick={()=>{setMsgToForward(m); setForwardModalOpen(true);}}><Forward size={14} className="text-blue-500"/></div>
-              {isMedia && (
-                  <div className="rounded overflow-hidden mb-1">
-                      {mediaSrc ? ( m.type === 'video' ? <video src={mediaSrc} controls className="w-full max-h-64 object-contain rounded"/> : <img src={mediaSrc} alt="Media" className="w-full max-h-64 object-cover rounded cursor-pointer" onClick={() => { const w = window.open(""); w?.document.write(`<img src="${mediaSrc}" style="width:100%"/>`); }}/> ) : ( <div className="bg-slate-100 p-4 flex items-center justify-center border rounded"><Loader2 className="animate-spin text-slate-400" size={20}/></div> )}
-                  </div>
-              )}
-              {m.body && <p className="whitespace-pre-wrap leading-relaxed">{m.body}</p>}
-              <span className="text-[9px] text-slate-400 block text-right mt-1">{new Date(m.timestamp*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</span>
+  // --- FILTROS ---
+  const chatListFiltered = useMemo(() => {
+    return (chats || []).filter(c => {
+      const phone = c.id?.user || "";
+      const info = fullCrmDb.clients?.[phone] || {};
+      const st = info.stage || stages[0] || "Nuevo";
+      return (chatFilterStage === "Todos" || st === chatFilterStage) && 
+             (c.name || phone).toLowerCase().includes(searchTerm.toLowerCase());
+    });
+  }, [chats, chatFilterStage, fullCrmDb, searchTerm, stages]);
+
+  const bulkListFiltered = useMemo(() => {
+    const phones = new Set([...chats.map(c => c.id?.user), ...(clients || []).map(c => c.phone)].filter(Boolean));
+    return Array.from(phones).map(p => {
+      const info = fullCrmDb.clients?.[p] || {};
+      const n = clients.find(cl => cl.phone === p)?.name || chats.find(ch => ch.id?.user === p)?.name || p;
+      return { phone: p, name: n, stage: info.stage || stages[0] || "Nuevo", labels: info.labels || [] };
+    }).filter(item => {
+      const matchSt = bulkFilterStage === "Todas" || item.stage === bulkFilterStage;
+      const matchLb = bulkFilterLabel === "Todas" || item.labels.includes(bulkFilterLabel);
+      return matchSt && matchLb && (item.name + item.phone).toLowerCase().includes(searchTerm.toLowerCase());
+    });
+  }, [chats, clients, fullCrmDb, bulkFilterStage, bulkFilterLabel, searchTerm, stages]);
+
+  // --- COMPONENTES DE RENDERIZADO ---
+  const MessageBubble = ({ m }: { m: any }) => {
+    const isMedia = m.hasMedia || m.mediaData;
+    const src = m.mediaData ? `data:${m.mimetype};base64,${m.mediaData}` : null;
+    return (
+      <div className={`flex ${m.fromMe ? 'justify-end' : 'justify-start'} mb-2`}>
+        <div className={`max-w-[80%] p-2 rounded-xl shadow-sm relative group ${m.fromMe ? 'bg-emerald-100 rounded-tr-none' : 'bg-white rounded-tl-none'}`}>
+          <div className="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-white shadow rounded-full p-1 cursor-pointer z-10" onClick={() => { setMsgToForward(m); setForwardModalOpen(true); }}>
+            <Forward size={14} className="text-blue-600" />
           </div>
-      );
+          {isMedia && (
+            <div className="mb-1 rounded overflow-hidden max-w-xs">
+              {src ? (
+                m.type === 'video' ? <video src={src} controls className="w-full h-auto" /> : 
+                <img src={src} className="w-full h-auto cursor-pointer" onClick={() => window.open().document.write(`<img src="${src}" style="width:100%"/>`)} />
+              ) : <div className="p-4 bg-slate-100 flex justify-center"><Loader2 className="animate-spin text-slate-400" /></div>}
+            </div>
+          )}
+          {m.body && <div className="text-sm whitespace-pre-wrap">{m.body}</div>}
+          <div className="text-[10px] text-slate-400 text-right mt-1">{new Date(m.timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+        </div>
+      </div>
+    );
   };
 
-  if(status !== 'READY') return <div className="flex flex-col items-center justify-center h-full bg-slate-100 font-bold text-slate-500 min-h-[500px]"><Loader2 className="animate-spin mb-4" size={48}/>Conectando...</div>;
+  if (status !== 'READY' && status !== 'DISCONNECTED') {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50">
+        {qrCode ? (
+          <div className="bg-white p-8 rounded-2xl shadow-xl text-center">
+            <h2 className="text-xl font-bold mb-4">Vincular SapiSoft</h2>
+            <QRCodeSVG value={qrCode} size={250} />
+            <p className="mt-4 text-slate-500 text-sm">Escanea con tu WhatsApp</p>
+          </div>
+        ) : <Loader2 className="animate-spin text-emerald-600" size={48} />}
+      </div>
+    );
+  }
 
   return (
-    <div className="flex h-screen w-full bg-white overflow-hidden text-slate-800 font-sans relative">
+    <div className="flex h-screen w-full bg-slate-100 overflow-hidden font-sans">
       {/* SIDEBAR */}
-      <div className={`flex flex-col bg-slate-50 border-r h-full ${showMobileChat ? 'hidden md:flex md:w-80' : 'w-full md:w-80'}`}>
-          <div className="p-3 bg-emerald-600 text-white flex justify-between items-center shadow shrink-0"><span className="font-bold flex gap-2"><MessageCircle/> SapiSoft</span></div>
-          <div className="flex text-[10px] font-bold border-b bg-white shrink-0">{['CHAT','BULK','CONFIG'].map(t => (<button key={t} onClick={()=>setActiveTab(t as any)} className={`flex-1 p-3 ${activeTab===t?'text-emerald-600 border-b-2 border-emerald-600':''}`}>{t}</button>))}</div>
-          <div className="p-2 bg-white border-b shrink-0"><div className="flex items-center gap-2 bg-slate-100 rounded-lg px-2 py-1.5 border"><Search size={14} className="text-slate-400"/><input className="bg-transparent outline-none text-xs w-full" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/></div></div>
-          
-          <div className="flex-1 overflow-y-auto min-h-0">
-              {activeTab === 'CHAT' && (
-                  <>
-                    <div className="p-2 bg-slate-50 border-b sticky top-0 z-10"><div className="flex items-center gap-2 bg-white rounded border p-1"><Filter size={14} className="text-slate-400"/><select className="w-full text-xs outline-none bg-transparent" value={chatFilterStage} onChange={e=>setChatFilterStage(e.target.value)}><option value="Todos">Todas las Etapas</option>{stages.map(s => <option key={s} value={s}>{s}</option>)}</select></div></div>
-                    {filteredChatList.map(c => (
-                        <div key={c.id?._serialized} onClick={() => loadChat(c.id?._serialized)} className={`p-3 border-b cursor-pointer hover:bg-slate-100 ${selectedChatId===c.id?._serialized?'bg-emerald-50':''}`}>
-                            <div className="flex justify-between font-bold text-sm truncate">{c.name || c.id?.user}</div>
-                            <div className="flex justify-between items-center text-xs text-slate-500 truncate">{c.lastMessage?.body || '...'}</div>
-                        </div>
-                    ))}
-                  </>
-              )}
-              {activeTab === 'BULK' && (
-                  <div className="p-2 space-y-3">
-                      <div className="bg-white p-2 rounded border space-y-2">
-                          <div><label className="text-xs font-bold block mb-1">Etapa</label><select className="w-full border text-xs p-1 rounded" value={bulkFilterStage} onChange={e=>setBulkFilterStage(e.target.value)}><option value="Todas">Todas</option>{stages.map(s=><option key={s} value={s}>{s}</option>)}</select></div>
-                          <div><label className="text-xs font-bold block mb-1">Etiqueta</label><select className="w-full border text-xs p-1 rounded" value={bulkFilterLabel} onChange={e=>setBulkFilterLabel(e.target.value)}><option value="Todas">Todas</option>{labels.map(l=><option key={l} value={l}>{l}</option>)}</select></div>
-                      </div>
-                      <div className="max-h-60 overflow-y-auto border rounded bg-white">
-                          {filteredBulkList.map((c:any, i:number) => (
-                              <div key={i} className="flex gap-2 items-center p-2 border-b">
-                                  <input type="checkbox" checked={selectedBulkClients.includes(c.phone)} onChange={()=>{setSelectedBulkClients(prev=>prev.includes(c.phone)?prev.filter(p=>p!==c.phone):[...prev, c.phone])}}/>
-                                  <div className="text-xs"><div className="font-bold">{c.name}</div><div className="flex gap-1">{c.labels?.map((l:string)=><span key={l} className="bg-blue-100 text-blue-700 px-1 rounded text-[8px]">{l}</span>)}</div></div>
-                              </div>
-                          ))}
-                      </div>
-                      <div className="bg-white p-2 rounded border">
-                          <textarea className="w-full border text-xs p-1 rounded mb-2" rows={2} placeholder="Números manuales..." value={manualNumbers} onChange={e=>setManualNumbers(e.target.value)}/>
-                          <label className="flex items-center gap-2 cursor-pointer bg-emerald-50 p-2 rounded border justify-center"><FileSpreadsheet size={16}/><span className="text-xs font-bold">Importar Excel</span><input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleExcelUpload}/></label>
-                      </div>
-                  </div>
-              )}
-              {activeTab === 'CONFIG' && (
-                  <div className="p-4 space-y-6">
-                      <div>
-                          <h3 className="font-bold text-sm mb-2">Etapas</h3>
-                          <div className="flex gap-2 mb-2"><input className="flex-1 border p-1 text-sm rounded" placeholder="Nueva..." value={newStageName} onChange={e=>setNewStageName(e.target.value)}/><button onClick={addStage} className="bg-emerald-600 text-white p-1 rounded"><PlusCircle size={18}/></button></div>
-                          {stages.map((s, i) => (<div key={i} className="bg-white p-2 rounded border text-sm mb-1">{s}</div>))}
-                      </div>
-                      <div>
-                          <h3 className="font-bold text-sm mb-2">Etiquetas</h3>
-                          <div className="flex gap-2 mb-2"><input className="flex-1 border p-1 text-sm rounded" placeholder="Nueva..." value={newLabelName} onChange={e=>setNewLabelName(e.target.value)}/><button onClick={addLabel} className="bg-blue-600 text-white p-1 rounded"><PlusCircle size={18}/></button></div>
-                          <div className="flex flex-wrap gap-2">{labels.map((l, i) => (<span key={i} className="bg-blue-100 text-blue-700 px-2 py-1 rounded text-xs border">{l}</span>))}</div>
-                      </div>
-                  </div>
-              )}
-          </div>
-      </div>
+      <div className={`flex flex-col bg-white border-r w-full md:w-80 shrink-0 ${showMobileChat ? 'hidden md:flex' : 'flex'}`}>
+        <div className="p-4 bg-emerald-600 text-white flex items-center justify-between shadow-md shrink-0">
+          <h1 className="font-bold flex items-center gap-2"><MessageCircle /> SapiSoft Pro</h1>
+          <button onClick={refreshData}><Settings size={18} /></button>
+        </div>
+        
+        <div className="flex border-b text-[11px] font-bold uppercase shrink-0">
+          {['CHAT', 'BULK', 'CONFIG'].map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab as any)} className={`flex-1 p-3 transition-colors ${activeTab === tab ? 'text-emerald-600 border-b-2 border-emerald-600 bg-emerald-50/30' : 'text-slate-400'}`}>{tab}</button>
+          ))}
+        </div>
 
-      {/* CHAT AREA */}
-      <div className={`flex-1 flex-col bg-[#efeae2] relative h-full min-h-0 ${showMobileChat ? 'flex' : 'hidden md:flex'}`}>
-          {activeTab === 'BULK' ? (
-              <div className="flex-1 overflow-y-auto p-4 flex justify-center">
-                  <div className="bg-white w-full max-w-lg p-6 rounded shadow h-fit">
-                      <h2 className="text-lg font-bold text-blue-600 mb-4 flex gap-2"><Users/> Difusión</h2>
-                      {bulkProgress ? (<div className="text-center py-10"><Loader2 className="animate-spin mx-auto mb-2"/><div className="text-3xl font-bold">{bulkProgress.current} / {bulkProgress.total}</div></div>) : (
-                          <>
-                            <div className="flex gap-4 mb-3">
-                                <div className="flex-1"><label className="text-[10px] font-bold">Min Delay</label><input type="number" className="w-full border rounded p-1" value={minDelay} onChange={e=>setMinDelay(Number(e.target.value))}/></div>
-                                <div className="flex-1"><label className="text-[10px] font-bold">Max Delay</label><input type="number" className="w-full border rounded p-1" value={maxDelay} onChange={e=>setMaxDelay(Number(e.target.value))}/></div>
-                            </div>
-                            <textarea className="w-full border p-3 rounded mb-3" rows={4} placeholder="Mensaje..." value={bulkMessage} onChange={e=>setBulkMessage(e.target.value)}/>
-                            <div className="flex flex-col gap-2 mb-4">
-                                <label className="flex items-center gap-2 cursor-pointer bg-slate-100 p-2 rounded border"><Paperclip size={16}/> <span className="text-sm">{bulkFile ? bulkFile.filename : 'Subir Imagen/Video'}</span><input type="file" className="hidden" onChange={handleFileUpload} accept="image/*,video/*"/>{bulkFile && <button onClick={()=>setBulkFile(null)} className="ml-auto text-red-500">X</button>}</label>
-                                {bulkFile && (<label className="flex items-center gap-2 p-2 border rounded bg-blue-50 cursor-pointer"><input type="checkbox" checked={sendTogether} onChange={()=>setSendTogether(!sendTogether)}/><span className="text-xs font-bold text-blue-800">Enviar como leyenda (Caption)</span></label>)}
-                            </div>
-                            <button onClick={() => api('/bulk/send', { method: 'POST', body: JSON.stringify({ numbers: selectedBulkClients.concat(manualNumbers.split(',').map(n => n.trim())).filter(Boolean), message: bulkMessage, media: bulkFile, minDelay, maxDelay, sendTogether }) })} className="w-full bg-blue-600 text-white py-3 rounded font-bold">ENVIAR AHORA</button>
-                          </>
-                      )}
-                  </div>
+        <div className="p-2 border-b bg-slate-50 shrink-0">
+          <div className="flex items-center gap-2 bg-white border rounded-lg px-3 py-1.5 focus-within:ring-2 ring-emerald-100 transition-all">
+            <Search size={14} className="text-slate-400" />
+            <input className="bg-transparent outline-none text-xs w-full" placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto min-h-0">
+          {activeTab === 'CHAT' && (
+            <>
+              <div className="p-2 bg-white border-b sticky top-0 z-10">
+                <select className="w-full text-xs border rounded p-1.5 outline-none bg-slate-50" value={chatFilterStage} onChange={e => setChatFilterStage(e.target.value)}>
+                  <option value="Todos">Todas las Etapas</option>
+                  {stages.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
               </div>
-          ) : selectedChatId ? (
-             <div className="flex-1 flex flex-col h-full min-h-0">
-                <div className="p-2 bg-slate-100 border-b flex justify-between items-center shadow-sm shrink-0">
-                    <div className="flex items-center gap-2"><button onClick={()=>setShowMobileChat(false)} className="md:hidden p-1 bg-white rounded-full"><ArrowLeft size={16}/></button><span className="font-bold truncate">{chats.find(c=>c.id?._serialized===selectedChatId)?.name || 'Chat'}</span></div>
-                    {crmClient && (<select className="text-xs border rounded p-1 bg-white text-emerald-700 font-bold" value={crmClient.stage} onChange={(e) => updateCrm('stage', e.target.value)}>{stages.map(s => <option key={s} value={s}>{s}</option>)}</select>)}
+              {chatListFiltered.map(c => (
+                <div key={c.id?._serialized} onClick={() => loadChat(c.id?._serialized)} className={`p-3 border-b cursor-pointer transition-colors hover:bg-slate-50 ${selectedChatId === c.id?._serialized ? 'bg-emerald-50 border-l-4 border-emerald-500' : ''}`}>
+                  <div className="flex justify-between items-center mb-1 font-bold text-sm truncate">{c.name || c.id?.user} {fullCrmDb.clients?.[c.id?.user]?.stage && <span className="text-[9px] px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-full">{fullCrmDb.clients[c.id.user].stage}</span>}</div>
+                  <div className="text-xs text-slate-400 truncate">{c.lastMessage?.body || 'Multimedia'}</div>
                 </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">{messages.map((m, i) => (<div key={i} className={`flex ${m.fromMe?'justify-end':'justify-start'}`}>{renderMessageContent(m)}</div>))}<div ref={msgsEndRef}/></div>
-                <div className="p-2 bg-slate-100 flex gap-2 shrink-0"><input className="flex-1 border p-2 rounded-full" value={msgInput} onChange={e=>setMsgInput(e.target.value)} onKeyPress={e=>e.key==='Enter'&&sendMessage()} placeholder="Escribe..."/><button onClick={()=>sendMessage()} className="bg-emerald-600 text-white p-2 rounded-full"><Send size={18}/></button></div>
-             </div>
-          ) : <div className="flex items-center justify-center h-full text-slate-400">Selecciona un chat</div>}
+              ))}
+            </>
+          )}
+
+          {activeTab === 'BULK' && (
+            <div className="p-3 space-y-3">
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold text-slate-400 uppercase">Filtros de Base</label>
+                <select className="w-full text-xs border rounded p-2" value={bulkFilterStage} onChange={e => setBulkFilterStage(e.target.value)}><option value="Todas">Etapa: Todas</option>{stages.map(s => <option key={s} value={s}>{s}</option>)}</select>
+                <select className="w-full text-xs border rounded p-2" value={bulkFilterLabel} onChange={e => setBulkFilterLabel(e.target.value)}><option value="Todas">Etiqueta: Todas</option>{labels.map(l => <option key={l} value={l}>{l}</option>)}</select>
+              </div>
+              <div className="border rounded-lg bg-white overflow-hidden">
+                <div className="p-2 bg-slate-50 border-b flex justify-between items-center text-[10px] font-bold">CONTACTOS ({bulkListFiltered.length}) <button onClick={() => setSelectedBulkClients(bulkListFiltered.map(l => l.phone))} className="text-emerald-600">TODOS</button></div>
+                <div className="max-h-48 overflow-y-auto">
+                  {bulkListFiltered.map((u, i) => (
+                    <div key={i} className="flex items-center gap-2 p-2 border-b text-xs hover:bg-slate-50">
+                      <input type="checkbox" checked={selectedBulkClients.includes(u.phone)} onChange={() => setSelectedBulkClients(prev => prev.includes(u.phone) ? prev.filter(p => p !== u.phone) : [...prev, u.phone])} />
+                      <span className="truncate flex-1">{u.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2 pt-2">
+                <textarea className="w-full border rounded p-2 text-xs h-16" placeholder="Números manuales (519...)" value={manualNumbers} onChange={e => setManualNumbers(e.target.value)} />
+                <label className="w-full flex items-center justify-center gap-2 p-2 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg cursor-pointer hover:bg-emerald-100 transition-colors font-bold text-xs"><FileSpreadsheet size={16} />Cargar Excel<input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleExcelImport} /></label>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'CONFIG' && (
+            <div className="p-4 space-y-6">
+              <section>
+                <h3 className="text-xs font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Settings size={14}/> Editor de Etapas</h3>
+                <div className="flex gap-2 mb-3">
+                  <input className="flex-1 border rounded-lg p-2 text-xs" placeholder="Nueva etapa..." value={newStageName} onChange={e => setNewStageName(e.target.value)} />
+                  <button onClick={() => { if(newStageName) { saveStages([...stages, newStageName]); setNewStageName(""); }}} className="bg-emerald-600 text-white p-2 rounded-lg"><PlusCircle size={18} /></button>
+                </div>
+                <div className="space-y-1">
+                  {stages.map((s, i) => (
+                    <div key={i} className="bg-slate-50 p-2 rounded-lg text-xs border flex justify-between items-center group">
+                      {editingStageIndex === i ? (
+                        <div className="flex gap-1 w-full"><input className="flex-1 border p-1 text-[10px] rounded" autoFocus value={tempStageName} onChange={e=>setTempStageName(e.target.value)} /><button onClick={()=>handleRenameStage(s)} className="text-green-600"><Save size={14}/></button></div>
+                      ) : (
+                        <>{s} <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity"><button onClick={()=>{setEditingStageIndex(i); setTempStageName(s);}} className="text-blue-500"><Edit2 size={12}/></button><button onClick={()=>{if(confirm('¿Eliminar?')) saveStages(stages.filter((_, idx)=>idx!==i))}} className="text-red-400"><Trash2 size={12}/></button></div></>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+              <section>
+                <h3 className="text-xs font-bold text-slate-400 uppercase mb-3 flex items-center gap-2"><Tag size={14}/> Etiquetas Globales</h3>
+                <div className="flex gap-2 mb-3">
+                  <input className="flex-1 border rounded-lg p-2 text-xs" placeholder="Nueva etiqueta..." value={newLabelName} onChange={e => setNewLabelName(e.target.value)} />
+                  <button onClick={() => { if(newLabelName){ const u = [...labels, newLabelName]; setLabels(u); apiCall('/crm/labels/update', 'POST', { labels: u }); setNewLabelName(""); }}} className="bg-blue-600 text-white p-2 rounded-lg"><PlusCircle size={18} /></button>
+                </div>
+                <div className="flex flex-wrap gap-1.5">{labels.map((l, i) => <span key={i} className="bg-blue-50 text-blue-600 px-2 py-1 rounded-md text-[10px] border border-blue-100 font-bold">{l}</span>)}</div>
+              </section>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* CRM PANEL */}
-      {selectedChatId && crmClient && activeTab === 'CHAT' && (
-          <div className="hidden md:flex w-72 bg-white border-l flex-col h-full">
-              <div className="p-4 border-b font-bold flex gap-2 shrink-0"><User size={16}/> Cliente</div>
-              <div className="p-4 flex-1 overflow-y-auto space-y-4 min-h-0">
-                  <div className="bg-blue-50 p-2 rounded border border-blue-100"><label className="text-[10px] font-bold text-slate-500 uppercase">Atendido por:</label><div className="font-bold text-blue-800 text-sm flex gap-2 items-center mt-1"><Briefcase size={12}/> {crmClient.agent}</div></div>
-                  <div><label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Etiquetas</label>
-                    <div className="flex flex-wrap gap-1">
-                      {labels.map(l => (
-                        <button key={l} onClick={() => {
-                          const currentLabels = crmClient.labels || [];
-                          const newLabels = currentLabels.includes(l) ? currentLabels.filter((i:any)=>i!==l) : [...currentLabels, l];
-                          updateCrm('labels', newLabels);
-                        }} className={`text-[10px] px-2 py-1 rounded border ${crmClient.labels?.includes(l) ? 'bg-green-500 text-white' : 'bg-white'}`}>{l}</button>
-                      ))}
-                    </div>
+      {/* ÁREA CENTRAL */}
+      <div className={`flex-1 flex flex-col bg-[#efeae2] h-full ${showMobileChat ? 'flex' : 'hidden md:flex'}`}>
+        {activeTab === 'BULK' ? (
+          <div className="flex-1 overflow-y-auto p-4 flex justify-center items-start">
+            <div className="bg-white w-full max-w-xl p-8 rounded-2xl shadow-lg mt-6">
+              <h2 className="text-xl font-bold mb-6 flex gap-2"><Users className="text-blue-600"/> Campaña Masiva</h2>
+              {bulkProgress ? (<div className="py-20 text-center"><Loader2 className="animate-spin text-blue-500 mx-auto mb-4" size={48} /><p className="font-bold text-lg">{bulkProgress.current} / {bulkProgress.total}</p><p className="text-xs text-slate-400">Enviando mensajes...</p></div>) : (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4 bg-slate-50 p-3 rounded-xl border">
+                    <div><label className="text-[10px] font-bold text-slate-400 mb-1 block uppercase">Retraso Mínimo</label><input type="number" className="w-full border rounded p-2 text-sm" value={minDelay} onChange={e => setMinDelay(Number(e.target.value))} /></div>
+                    <div><label className="text-[10px] font-bold text-slate-400 mb-1 block uppercase">Retraso Máximo</label><input type="number" className="w-full border rounded p-2 text-sm" value={maxDelay} onChange={e => setMaxDelay(Number(e.target.value))} /></div>
                   </div>
-                  <div><label className="text-[10px] font-bold text-slate-500 uppercase mb-2 block">Historial</label>
-                    <div className="space-y-2 max-h-60 overflow-y-auto">{crmClient.notes?.map((n:any) => (<div key={n.id} className="bg-yellow-50 p-2 rounded border border-yellow-200 text-xs"><p>{n.text}</p><span className="text-[9px] text-slate-400 mt-1 block">{new Date(n.date).toLocaleDateString()}</span></div>))}</div>
+                  <textarea className="w-full border rounded-xl p-4 text-sm focus:ring-2 ring-blue-100 outline-none" rows={6} placeholder="Escribe tu mensaje..." value={bulkMessage} onChange={e => setBulkMessage(e.target.value)} />
+                  <div className="space-y-3">
+                    <label className="flex items-center gap-3 p-3 bg-slate-50 border-2 border-dashed border-slate-200 rounded-xl cursor-pointer hover:border-blue-300 transition-colors text-slate-500">
+                      <Paperclip size={18}/><span className="text-sm flex-1">{bulkFile ? bulkFile.filename : 'Subir Imagen o Video'}</span><input type="file" className="hidden" accept="image/*,video/*" onChange={handleFileUpload} />
+                    </label>
+                    {bulkFile && (
+                      <label className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-100 rounded-xl cursor-pointer">
+                        <input type="checkbox" checked={sendTogether} onChange={() => setSendTogether(!sendTogether)} /><span className="text-xs font-bold text-blue-700">Enviar texto como leyenda (Caption)</span>
+                      </label>
+                    )}
                   </div>
-              </div>
-              <div className="p-3 border-t bg-slate-50 shrink-0"><textarea className="w-full border text-xs p-2 rounded mb-2" rows={2} placeholder="Nueva nota..." value={newNote} onChange={e=>setNewNote(e.target.value)}/><button onClick={()=>updateCrm('note', newNote).then(()=>setNewNote(""))} className="w-full bg-slate-800 text-white text-xs py-2 rounded">Guardar Nota</button></div>
+                  <button onClick={() => apiCall('/bulk/send', 'POST', { numbers: Array.from(new Set([...selectedBulkClients, ...manualNumbers.split(',').map(n => n.trim())])).filter(n => n.length > 7), message: bulkMessage, media: bulkFile, minDelay, maxDelay, sendTogether })} className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-lg transition-transform active:scale-95">INICIAR ENVÍO MASIVO</button>
+                </div>
+              )}
+            </div>
           </div>
-      )}
+        ) : selectedChatId ? (
+          <div className="flex flex-col h-full">
+             <div className="p-3 bg-white border-b flex justify-between items-center shadow-sm shrink-0">
+               <div className="flex items-center gap-3">
+                 <button onClick={() => setShowMobileChat(false)} className="md:hidden p-2 hover:bg-slate-100 rounded-full"><ArrowLeft size={20} /></button>
+                 <div className="font-bold text-slate-700">{chats.find(c => c.id?._serialized === selectedChatId)?.name || 'Chat'}</div>
+               </div>
+               {crmClient && (<select className="text-xs border rounded-full px-3 py-1 bg-emerald-50 text-emerald-700 font-bold border-emerald-200 outline-none" value={crmClient.stage} onChange={(e) => updateCrm('stage', e.target.value)}>{stages.map(s => <option key={s} value={s}>{s}</option>)}</select>)}
+             </div>
+             <div className="flex-1 overflow-y-auto p-4 space-y-2 min-h-0 bg-[#efeae2]">{messages.map((m, i) => <MessageBubble key={i} m={m} />)}<div ref={msgsEndRef} /></div>
+             <div className="p-3 bg-white border-t flex gap-2 shrink-0">
+               <input className="flex-1 border border-slate-200 rounded-full px-4 py-2 text-sm focus:ring-2 ring-emerald-100 outline-none" value={msgInput} onChange={e => setMsgInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && sendText()} placeholder="Escribe un mensaje..." />
+               <button onClick={() => { if(msgInput) { apiCall('/messages', 'POST', { chatId: selectedChatId, content: msgInput }); setMsgInput(""); }}} className="bg-emerald-600 text-white p-3 rounded-full shadow-md"><Send size={20} /></button>
+             </div>
+          </div>
+        ) : <div className="flex-1 flex flex-col items-center justify-center text-slate-300"><MessageCircle size={80} className="mb-4 opacity-10" /><p className="font-medium text-lg">SapiSoft Pro CRM</p></div>}
+      </div>
 
-      {/* MODAL REENVIAR */}
-      {forwardModalOpen && (
-          <div className="absolute inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-              <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm flex flex-col max-h-[80vh]">
-                  <div className="p-4 border-b flex justify-between items-center font-bold">Reenviar a...<button onClick={()=>setForwardModalOpen(false)}><X size={18}/></button></div>
-                  <div className="p-2 border-b"><input className="w-full border p-2 rounded text-sm" placeholder="Buscar..." value={forwardSearch} onChange={e=>setForwardSearch(e.target.value)}/></div>
-                  <div className="flex-1 overflow-y-auto">
-                      {chats.filter(c => (c.name||'').toLowerCase().includes(forwardSearch.toLowerCase())).map(c => (
-                          <div key={c.id._serialized} onClick={()=>handleForward(c.id._serialized)} className="p-3 border-b hover:bg-slate-50 cursor-pointer flex justify-between items-center text-sm font-bold">{c.name || c.id.user}<Send size={14} className="text-slate-400"/></div>
-                      ))}
-                  </div>
-              </div>
+      {/* CRM PANEL (DERECHA) */}
+      {selectedChatId && crmClient && activeTab === 'CHAT' && (
+        <div className="hidden lg:flex w-72 bg-white border-l flex-col h-full shadow-2xl">
+          <div className="p-4 border-b bg-slate-50 font-bold flex items-center gap-2 shrink-0"><User size={18} className="text-emerald-600" /> Perfil</div>
+          <div className="p-4 flex-1 overflow-y-auto space-y-6">
+             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Agente</label><div className="text-sm font-bold text-blue-700 flex gap-2 bg-blue-50 p-3 rounded-xl"><Briefcase size={16}/> {crmClient.agent || "Sistema"}</div></div>
+             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Etiquetas</label>
+               <div className="flex flex-wrap gap-1.5">
+                 {labels.map(l => (<button key={l} onClick={() => { const c = crmClient.labels || []; const n = c.includes(l) ? c.filter((i:any)=>i!==l) : [...c, l]; updateCrm('labels', n); }} className={`text-[10px] px-3 py-1.5 rounded-lg border font-bold transition-all ${crmClient.labels?.includes(l) ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-white text-slate-600 hover:border-emerald-300'}`}>{l}</button>))}
+               </div>
+             </div>
+             <div><label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 block">Historial</label>
+               <div className="space-y-2">
+                 {crmClient.notes?.map((n:any) => (<div key={n.id} className="bg-amber-50 p-3 rounded-xl border border-amber-100 text-xs text-slate-600 leading-relaxed">{n.text}<div className="text-[9px] text-amber-500 mt-2 font-bold">{new Date(n.date).toLocaleDateString()}</div></div>))}
+               </div>
+             </div>
           </div>
+          <div className="p-4 border-t bg-slate-50 space-y-2 shrink-0"><textarea className="w-full border rounded-xl p-2 text-xs outline-none focus:ring-2 ring-emerald-100" rows={3} placeholder="Nueva nota..." value={newNote} onChange={e => setNewNote(e.target.value)} /><button onClick={() => { if(newNote) updateCrm('note', newNote).then(() => setNewNote("")); }} className="w-full bg-slate-800 text-white text-xs py-2.5 rounded-xl font-bold hover:bg-black">Guardar Nota</button></div>
+        </div>
       )}
     </div>
   );
