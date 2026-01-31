@@ -9,7 +9,7 @@ const BACKEND_URL = 'https://irrespectively-excursional-alisson.ngrok-free.dev';
 const NOTIFICATION_SOUND = 'https://assets.mixkit.co/active_storage/sfx/2354/2354-preview.mp3';
 
 export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
-  // ESTADOS
+  // --- ESTADOS ---
   const [socket, setSocket] = useState<Socket | null>(null);
   const [status, setStatus] = useState('DISCONNECTED');
   const [qrCode, setQrCode] = useState('');
@@ -28,19 +28,19 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
   const [fullCrmDb, setFullCrmDb] = useState<any>({ clients: {}, stages: [], labels: [] });
   const [crmClient, setCrmClient] = useState<any>(null);
   const [stages, setStages] = useState<string[]>([]);
-  const [labels, setLabels] = useState<string[]>([]); // Etiquetas Globales
+  const [labels, setLabels] = useState<string[]>([]);
   const [newNote, setNewNote] = useState("");
   const [isEditingAgent, setIsEditingAgent] = useState(false);
 
   // CONFIG
   const [newStageName, setNewStageName] = useState("");
-  const [newLabelName, setNewLabelName] = useState(""); // Nueva Etiqueta
+  const [newLabelName, setNewLabelName] = useState(""); 
   const [editingStageIndex, setEditingStageIndex] = useState<number | null>(null);
   const [tempStageName, setTempStageName] = useState("");
 
   // DIFUSIÓN
   const [bulkFilterStage, setBulkFilterStage] = useState("Todas");
-  const [bulkFilterLabel, setBulkFilterLabel] = useState("Todas"); // Filtro Etiqueta
+  const [bulkFilterLabel, setBulkFilterLabel] = useState("Todas"); 
   const [selectedBulkClients, setSelectedBulkClients] = useState<string[]>([]);
   const [manualNumbers, setManualNumbers] = useState("");
   const [bulkMessage, setBulkMessage] = useState("");
@@ -77,7 +77,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       const db = await api('/crm/all'); 
       setFullCrmDb(db); 
       setStages(db.stages || []); 
-      setLabels(db.labels || []); // Cargar etiquetas
+      setLabels(db.labels || []); 
   };
   
   const loadChat = async (id: string) => {
@@ -91,7 +91,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
   const handleNewMsg = (msg: any) => {
       setSelectedChatId(prev => {
           if(prev === (msg.fromMe ? msg.to : msg.from)) { 
-              if(msg.hasMedia) setTimeout(() => loadChat(prev), 1000); 
+              if(msg.hasMedia) setTimeout(() => loadChat(prev), 1500); 
               else { setMessages(m => [...m, msg]); setTimeout(()=>msgsEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100); }
           }
           return prev;
@@ -105,28 +105,14 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       if(chatId === selectedChatId) setMsgInput("");
   };
 
-  // --- REENVIAR MENSAJE ---
   const handleForward = async (targetChatId: string) => {
       if(!msgToForward) return;
-      
-      // Si tiene media, reenviamos la media
-      if(msgToForward.hasMedia && msgToForward.mediaData) {
-          // Usamos el endpoint de bulk (truco) o message normal enviando objeto manual?
-          // Mejor: Enviamos como si fuera bulk a 1 persona para reusar logica de media
-          // O simplificado: Mandar texto y ya. 
-          // Implementacion robusta: Reenviar contenido.
-          if(msgToForward.body) await sendMessage(targetChatId, msgToForward.body);
-          // Falta logica de reenviar media exacta, por ahora solo texto para simplificar sin recargar server
-          // Si quieres media, hay que bajarla y subirla.
-          alert("Reenviado (Texto)");
-      } else {
-          await sendMessage(targetChatId, msgToForward.body);
-          alert("Mensaje reenviado");
-      }
+      if(msgToForward.body) await sendMessage(targetChatId, msgToForward.body);
+      else alert("Solo se puede reenviar texto por ahora.");
+      alert("Reenviado");
       setForwardModalOpen(false);
   };
 
-  // --- IMPORTAR EXCEL ---
   const handleExcelUpload = (e: any) => {
       const file = e.target.files[0];
       if(!file) return;
@@ -137,16 +123,14 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
           const wsname = wb.SheetNames[0];
           const ws = wb.Sheets[wsname];
           const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
-          
-          // Asumimos que los números están en la primera columna (índice 0)
           const numbers = data.map((row: any) => row[0]).filter((n: any) => n && n.toString().length > 6);
           setManualNumbers(prev => (prev ? prev + ", " : "") + numbers.join(", "));
-          alert(`✅ Importados ${numbers.length} números del Excel`);
+          alert(`✅ Importados ${numbers.length} números`);
       };
       reader.readAsBinaryString(file);
   };
 
-  // --- RENDERIZADOR MENSAJES ---
+  // RENDERIZADOR MENSAJES
   const renderMessageContent = (m: any) => {
       const isMedia = m.hasMedia || m.type === 'image' || m.type === 'video';
       const mediaSrc = m.mediaData ? `data:${m.mimetype};base64,${m.mediaData}` : null;
@@ -154,9 +138,9 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       return (
           <div className={`max-w-[85%] md:max-w-[60%] p-2 rounded-lg text-sm shadow relative break-words flex flex-col gap-1 group ${m.fromMe?'bg-[#d9fdd3] rounded-tr-none':'bg-white rounded-tl-none'}`}>
               
-              {/* HEADER (Reenviar) */}
-              <div className="hidden group-hover:flex absolute -top-2 -right-2 bg-white rounded-full shadow p-1 cursor-pointer z-10" onClick={()=>{setMsgToForward(m); setForwardModalOpen(true);}}>
-                  <Forward size={12} className="text-slate-500"/>
+              {/* BOTÓN REENVIAR (Visible siempre en móvil, hover en PC) */}
+              <div className="flex opacity-70 md:opacity-0 md:group-hover:opacity-100 absolute -top-2 -right-2 bg-white rounded-full shadow p-1 cursor-pointer z-10 transition-opacity" onClick={()=>{setMsgToForward(m); setForwardModalOpen(true);}}>
+                  <Forward size={14} className="text-blue-500"/>
               </div>
 
               {isMedia && (
@@ -165,7 +149,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
                           m.type === 'video' ? <video src={mediaSrc} controls className="w-full max-h-64 object-contain rounded"/> : 
                           <img src={mediaSrc} alt="Media" className="w-full max-h-64 object-cover rounded cursor-pointer" onClick={() => { const w = window.open(""); w?.document.write(`<img src="${mediaSrc}" style="width:100%"/>`); }}/>
                       ) : (
-                          <div className="bg-slate-100 p-4 flex items-center justify-center gap-2 border border-slate-200 rounded"><Loader2 className="animate-spin text-slate-400" size={20}/><span className="text-xs text-slate-500 font-bold">Cargando...</span></div>
+                          <div className="bg-slate-100 p-4 flex items-center justify-center gap-2 border border-slate-200 rounded"><Loader2 className="animate-spin text-slate-400" size={20}/></div>
                       )}
                   </div>
               )}
@@ -175,7 +159,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       );
   };
 
-  // --- FILTROS ---
+  // FILTROS
   const filteredChatList = useMemo(() => {
       if (!Array.isArray(chats)) return [];
       let list = chats;
@@ -191,13 +175,11 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
       const allPhones = new Set([...chats.map(c => c.id.user), ...(clients || []).map(c => c.phone)]);
       let list = Array.from(allPhones).map(phone => {
           const crmInfo = fullCrmDb.clients[phone] || {};
-          return { phone, name: clients?.find(c=>c.phone === phone)?.name || chats.find(c=>c.id.user === phone)?.name || phone, stage: crmInfo.stage || stages[0], labels: crmInfo.labels || [] };
+          const name = clients?.find(c=>c.phone === phone)?.name || chats.find(c=>c.id.user === phone)?.name || phone;
+          return { phone, name, stage: crmInfo.stage || stages[0], labels: crmInfo.labels || [] };
       });
-      // Filtro Etapa
       if(bulkFilterStage !== "Todas") list = list.filter(c => c.stage === bulkFilterStage);
-      // Filtro Etiqueta
       if(bulkFilterLabel !== "Todas") list = list.filter(c => c.labels.includes(bulkFilterLabel));
-      
       if(searchTerm) {
           const lowerSearch = searchTerm.toLowerCase();
           list = list.filter(c => String(c.name || '').toLowerCase().includes(lowerSearch) || String(c.phone || '').includes(lowerSearch));
@@ -258,7 +240,7 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
                       <div className="bg-white p-2 rounded border">
                           <label className="text-xs font-bold block mb-1">Números Manuales / Excel</label>
                           <textarea className="w-full border text-xs p-1 rounded font-mono mb-2" rows={2} placeholder="999888777..." value={manualNumbers} onChange={e=>setManualNumbers(e.target.value)}/>
-                          <label className="flex items-center gap-2 cursor-pointer bg-emerald-50 p-2 rounded border border-emerald-200 justify-center"><FileSpreadsheet size={16} className="text-emerald-600"/><span className="text-xs font-bold text-emerald-700">Importar Excel</span><input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleExcelUpload}/></label>
+                          <label className="flex items-center gap-2 cursor-pointer bg-emerald-50 p-2 rounded border border-emerald-200 justify-center"><FileSpreadsheet size={16} className="text-emerald-600"/><span className="text-xs font-bold text-emerald-700">Importar Excel (.xlsx)</span><input type="file" className="hidden" accept=".xlsx, .xls" onChange={handleExcelUpload}/></label>
                       </div>
                   </div>
               )}
@@ -322,9 +304,9 @@ export default function WhatsAppModule({ clients = [] }: { clients: any[] }) {
                   <div className="p-4 border-b flex justify-between items-center"><h3 className="font-bold flex items-center gap-2"><Forward size={16}/> Reenviar a...</h3><button onClick={()=>setForwardModalOpen(false)}><X size={18}/></button></div>
                   <div className="p-2 border-b"><input className="w-full border p-2 rounded text-sm" placeholder="Buscar chat..." value={forwardSearch} onChange={e=>setForwardSearch(e.target.value)} autoFocus/></div>
                   <div className="flex-1 overflow-y-auto">
-                      {chats.filter(c => c.name.toLowerCase().includes(forwardSearch.toLowerCase())).map(c => (
+                      {chats.filter(c => (c.name||'').toLowerCase().includes(forwardSearch.toLowerCase())).map(c => (
                           <div key={c.id._serialized} onClick={()=>handleForward(c.id._serialized)} className="p-3 border-b hover:bg-slate-50 cursor-pointer flex justify-between items-center">
-                              <span className="font-bold text-sm">{c.name}</span><Send size={14} className="text-slate-400"/>
+                              <span className="font-bold text-sm truncate w-48">{c.name || c.id.user}</span><Send size={14} className="text-slate-400"/>
                           </div>
                       ))}
                   </div>
