@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { Search, Wallet, TrendingUp, TrendingDown, ArrowRight, User, Plus, X, UserPlus, Banknote, QrCode, CreditCard, Landmark } from 'lucide-react';
+import { Search, Wallet, TrendingUp, TrendingDown, ArrowRight, User, Plus, X, UserPlus, Banknote, QrCode, CreditCard, Landmark, Lock } from 'lucide-react';
 import { Client, GeoLocation, BankAccount, PaymentMethodType } from '../types';
 
 interface ClientWalletProps {
@@ -10,9 +10,10 @@ interface ClientWalletProps {
     onUpdateClientBalance: (clientId: string, amountChange: number, reason: string, paymentMethod?: PaymentMethodType, accountId?: string) => void;
     onAddClient: (client: Client) => void;
     bankAccounts?: BankAccount[]; // New prop for bank selection
+    isCashBoxOpen: boolean; // NEW PROP
 }
 
-const ClientWalletModule: React.FC<ClientWalletProps> = ({ clients, locations, onUpdateClientBalance, onAddClient, bankAccounts = [] }) => {
+const ClientWalletModule: React.FC<ClientWalletProps> = ({ clients, locations, onUpdateClientBalance, onAddClient, bankAccounts = [], isCashBoxOpen }) => {
     const [searchTerm, setSearchTerm] = useState('');
     const [selectedClient, setSelectedClient] = useState<Client | null>(null);
     const [transactionType, setTransactionType] = useState<'Deposit' | 'Withdraw'>('Deposit');
@@ -42,6 +43,11 @@ const ClientWalletModule: React.FC<ClientWalletProps> = ({ clients, locations, o
         const val = parseFloat(amount);
         if (isNaN(val) || val <= 0) return alert("Monto inválido");
         if (transactionType === 'Withdraw' && val > selectedClient.digitalBalance) return alert("Saldo insuficiente");
+        
+        // VALIDACIÓN DE CAJA CERRADA
+        if (paymentMethod === 'Efectivo' && !isCashBoxOpen) {
+            return alert("⛔ CAJA CERRADA: No puede realizar movimientos de efectivo (Entrada/Salida) sin abrir turno primero.");
+        }
         
         if (transactionType === 'Deposit' && paymentMethod !== 'Efectivo' && !selectedAccountId) {
             return alert("Debe seleccionar la cuenta bancaria de destino.");
@@ -83,40 +89,45 @@ const ClientWalletModule: React.FC<ClientWalletProps> = ({ clients, locations, o
                     <div className="bg-white dark:bg-slate-800 w-[450px] rounded-2xl shadow-xl p-6 animate-in fade-in zoom-in-95">
                         <div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg text-slate-800 dark:text-white">{transactionType === 'Deposit' ? 'Recargar Saldo' : 'Retirar Fondos'}</h3><button onClick={() => setShowModal(false)}><X className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"/></button></div>
                         <div className="space-y-4">
-                            <div><label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Monto (S/)</label><input type="number" autoFocus className="w-full p-3 border border-slate-200 dark:border-slate-600 rounded-xl text-2xl font-bold text-slate-800 dark:text-white bg-white dark:bg-slate-700 outline-none focus:border-blue-500" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00"/></div>
-                            <div><label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Motivo / Referencia</label><input type="text" className="w-full p-3 border border-slate-200 dark:border-slate-600 rounded-xl text-sm bg-white dark:bg-slate-700 text-slate-800 dark:text-white outline-none" value={reason} onChange={e => setReason(e.target.value)} placeholder={transactionType === 'Deposit' ? "Ej. Pago Adelantado" : "Ej. Devolución de saldo"}/></div>
-                            
-                            {transactionType === 'Deposit' && (
-                                <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl border border-slate-100 dark:border-slate-600 space-y-3">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Método de Ingreso</label>
-                                    <div className="grid grid-cols-2 gap-2">
-                                        {['Efectivo', 'Transferencia', 'Yape', 'Tarjeta'].map(m => (
-                                            <button 
-                                                key={m} 
-                                                onClick={() => { setPaymentMethod(m as any); setSelectedAccountId(''); }}
-                                                className={`py-2 text-[10px] font-bold rounded-lg border uppercase transition-all ${paymentMethod === m ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
-                                            >
-                                                {m}
-                                            </button>
-                                        ))}
-                                    </div>
-                                    {paymentMethod !== 'Efectivo' && (
-                                        <div className="animate-in fade-in slide-in-from-top-1">
-                                            <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">Cuenta Destino</label>
-                                            <select 
-                                                className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none"
-                                                value={selectedAccountId}
-                                                onChange={e => setSelectedAccountId(e.target.value)}
-                                            >
-                                                <option value="">-- SELECCIONAR CUENTA --</option>
-                                                {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.alias || b.bankName} - {b.accountNumber}</option>)}
-                                            </select>
-                                        </div>
-                                    )}
+                            {/* ALERTA VISUAL DE CAJA */}
+                            {paymentMethod === 'Efectivo' && !isCashBoxOpen && (
+                                <div className="p-3 bg-red-100 text-red-700 rounded-xl text-xs font-bold flex items-center gap-2">
+                                    <Lock size={16}/> Caja Cerrada. Seleccione otro método o abra caja.
                                 </div>
                             )}
 
-                            <button onClick={handleExecuteTransaction} className={`w-full py-3 text-white font-bold rounded-xl mt-2 shadow-lg transition-all active:scale-95 ${transactionType === 'Deposit' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}>Confirmar Transacción</button>
+                            <div><label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Monto (S/)</label><input type="number" autoFocus className="w-full p-3 border border-slate-200 dark:border-slate-600 rounded-xl text-2xl font-bold text-slate-800 dark:text-white bg-white dark:bg-slate-700 outline-none focus:border-blue-500" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00"/></div>
+                            <div><label className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase">Motivo / Referencia</label><input type="text" className="w-full p-3 border border-slate-200 dark:border-slate-600 rounded-xl text-sm bg-white dark:bg-slate-700 text-slate-800 dark:text-white outline-none" value={reason} onChange={e => setReason(e.target.value)} placeholder={transactionType === 'Deposit' ? "Ej. Pago Adelantado" : "Ej. Devolución de saldo"}/></div>
+                            
+                            <div className="p-4 bg-slate-50 dark:bg-slate-700/50 rounded-xl border border-slate-100 dark:border-slate-600 space-y-3">
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Método de {transactionType === 'Deposit' ? 'Ingreso' : 'Egreso'}</label>
+                                <div className="grid grid-cols-2 gap-2">
+                                    {['Efectivo', 'Transferencia', 'Yape', 'Tarjeta'].map(m => (
+                                        <button 
+                                            key={m} 
+                                            onClick={() => { setPaymentMethod(m as any); setSelectedAccountId(''); }}
+                                            className={`py-2 text-[10px] font-bold rounded-lg border uppercase transition-all ${paymentMethod === m ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}
+                                        >
+                                            {m}
+                                        </button>
+                                    ))}
+                                </div>
+                                {paymentMethod !== 'Efectivo' && (
+                                    <div className="animate-in fade-in slide-in-from-top-1">
+                                        <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-1">Cuenta {transactionType === 'Deposit' ? 'Destino' : 'Origen'}</label>
+                                        <select 
+                                            className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-xs font-bold outline-none"
+                                            value={selectedAccountId}
+                                            onChange={e => setSelectedAccountId(e.target.value)}
+                                        >
+                                            <option value="">-- SELECCIONAR CUENTA --</option>
+                                            {bankAccounts.map(b => <option key={b.id} value={b.id}>{b.alias || b.bankName} - {b.accountNumber}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+                            </div>
+
+                            <button onClick={handleExecuteTransaction} disabled={paymentMethod === 'Efectivo' && !isCashBoxOpen} className={`w-full py-3 text-white font-bold rounded-xl mt-2 shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${transactionType === 'Deposit' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-red-600 hover:bg-red-700'}`}>Confirmar Transacción</button>
                         </div>
                     </div>
                 </div>

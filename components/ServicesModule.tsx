@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Smartphone, Search, Filter, Wrench, X, Save, Clock, CheckCircle, AlertCircle, Calendar, User, UserCog, Printer, Package, Plus, Trash2, ArrowRight, UserPlus, CreditCard, Phone, Banknote, QrCode, Landmark, Calculator, Receipt, Ban, CheckSquare, ChevronDown, Edit3, MessageCircle, Send, CornerUpLeft, MoreVertical, Wallet, Lock, ShieldAlert, ListChecks, Tablet, Hash } from 'lucide-react';
+import { Smartphone, Search, Filter, Wrench, X, Save, Clock, CheckCircle, AlertCircle, Calendar, User, UserCog, Printer, Package, Plus, Trash2, ArrowRight, UserPlus, CreditCard, Phone, Banknote, QrCode, Landmark, Calculator, Receipt, Ban, CheckSquare, ChevronDown, Edit3, MessageCircle, Send, CornerUpLeft, MoreVertical, Wallet, Lock, ShieldAlert, ListChecks, Tablet, Hash, CloudDownload, Loader2, Zap, Unlock } from 'lucide-react';
 import { ServiceOrder, Product, ServiceProductItem, PaymentBreakdown, Category, Client, BankAccount, PaymentMethodType, GeoLocation } from '../types';
 
 interface ServicesProps {
@@ -44,8 +44,14 @@ export const ServicesModule: React.FC<ServicesProps> = ({ services, products, ca
   const [priceEditingProduct, setPriceEditingProduct] = useState<ServiceProductItem | null>(null);
   const [tempPriceInput, setTempPriceInput] = useState('');
 
+  // NOTIFICACIÓN AUTOMÁTICA
+  const [autoNotify, setAutoNotify] = useState(false);
+
   // Mano de Obra
   const [laborInput, setLaborInput] = useState('0');
+
+  // Search API state
+  const [isSearchingClient, setIsSearchingClient] = useState(false);
 
   const [newClientData, setNewClientData] = useState({ 
       name: '', dni: '', phone: '', address: '',
@@ -77,6 +83,40 @@ export const ServicesModule: React.FC<ServicesProps> = ({ services, products, ca
       client: '', clientPhone: '', deviceModel: '', issue: '', cost: 0, technician: '', receptionist: 'ADMIN', entryDate: '', entryTime: '', usedProducts: []
   });
 
+  const searchClientByDoc = async () => {
+    if (!newClientData.dni) return;
+    setIsSearchingClient(true);
+    
+    // SIMULACION DE API
+    setTimeout(() => {
+        const isRuc = newClientData.dni.length === 11;
+        const isDni = newClientData.dni.length === 8;
+        
+        if (isDni) {
+            setNewClientData(prev => ({
+                ...prev,
+                name: 'JUAN PEREZ (RENIEC)',
+                address: 'AV. SIEMPRE VIVA 123',
+                department: 'LIMA',
+                province: 'LIMA',
+                district: 'MIRAFLORES'
+            }));
+        } else if (isRuc) {
+            setNewClientData(prev => ({
+                ...prev,
+                name: 'EMPRESA EJEMPLO S.A.C.',
+                address: 'CALLE DE NEGOCIOS 456',
+                department: 'AREQUIPA',
+                province: 'AREQUIPA',
+                district: 'YANAHUARA'
+            }));
+        } else {
+            alert("Formato de documento no válido (8 u 11 dígitos)");
+        }
+        setIsSearchingClient(false);
+    }, 1000);
+  };
+
   const calculateOrderTotal = (order: ServiceOrder | Partial<ServiceOrder>) => {
       const productsTotal = (order.usedProducts || []).reduce((sum, item) => sum + (item.price * item.quantity), 0);
       return (order.cost || 0) + productsTotal;
@@ -87,10 +127,46 @@ export const ServicesModule: React.FC<ServicesProps> = ({ services, products, ca
 
   const handleWhatsAppNotify = (service: ServiceOrder) => {
       const total = calculateOrderTotal(service).toFixed(2);
-      const message = `Hola *${service.client.split(' ')[0]}*, le informamos que su equipo *${service.deviceModel}* ya está listo para recoger.\n\n🛠️ *Estado:* Reparado\n💰 *Total:* S/ ${total}`;
+      const message = `Hola *${service.client.split(' ')[0]}*, le informamos que su equipo *${service.deviceModel}* ya está listo para recoger.\n\n🛠️ *Estado:* Reparado\n💰 *Total:* S/ ${total}\n\nGracias por su preferencia.`;
+      
       let phoneNumber = service.clientPhone?.replace(/[^0-9]/g, '') || "";
+      // Ensure country code if missing (PERU 51)
       if (phoneNumber.length === 9) phoneNumber = `51${phoneNumber}`;
-      window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`, '_blank');
+      
+      if(phoneNumber.length > 5) {
+          // Use onOpenWhatsApp prop if available (integration point) or fallback to window.open
+          if(onOpenWhatsApp) {
+              onOpenWhatsApp(service.client, phoneNumber, message);
+          } else {
+              window.open(`https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`, '_blank');
+          }
+      } else {
+          alert("El cliente no tiene un número de celular válido para WhatsApp.");
+      }
+  };
+
+  // --- LOGICA AUTOMATIZACIÓN ---
+  const toggleAutoNotify = () => {
+      if (!autoNotify) {
+          const pass = prompt("Ingrese clave de administrador para activar notificaciones automáticas:");
+          if (pass === '1234') {
+              setAutoNotify(true);
+              alert("Notificación automática ACTIVADA. Se abrirá WhatsApp al marcar 'Listo'.");
+          } else if (pass !== null) {
+              alert("Clave incorrecta.");
+          }
+      } else {
+          setAutoNotify(false);
+      }
+  };
+
+  const handleMarkAndNotify = (s: ServiceOrder) => {
+      onMarkRepaired(s.id);
+      setOpenMenuId(null);
+      if (autoNotify) {
+          // Delay to allow state update before opening window
+          setTimeout(() => handleWhatsAppNotify(s), 300);
+      }
   };
 
   const handleAuthorize = () => {
@@ -232,7 +308,17 @@ export const ServicesModule: React.FC<ServicesProps> = ({ services, products, ca
                   <input type="text" placeholder="Buscar por Cliente, DNI, Equipo o Ticket..." className="pl-9 pr-4 py-1.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 rounded-xl text-[10px] w-80 outline-none focus:border-primary-500" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
               </div>
           </div>
-          <button onClick={() => { setLaborInput('0'); setNewOrder({ client: '', deviceModel: '', receptionist: 'ADMIN', cost: 0, usedProducts: [], entryDate: getCurrentDate(), entryTime: getCurrentTime() }); setShowModal(true); }} className="bg-primary-600 text-white px-4 py-2 rounded-xl text-[10px] font-black hover:bg-primary-700 shadow-lg flex items-center gap-2 transition-all active:scale-95"><Plus size={14}/> NUEVA RECEPCIÓN</button>
+          <div className="flex gap-2">
+              <button 
+                onClick={toggleAutoNotify}
+                className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase flex items-center gap-2 transition-all border ${autoNotify ? 'bg-green-100 text-green-700 border-green-200 shadow-sm' : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'}`}
+                title="Activar envío automático de WhatsApp al marcar como reparado"
+              >
+                  {autoNotify ? <Zap size={14} className="fill-green-600"/> : <Zap size={14}/>}
+                  {autoNotify ? 'Auto-Notificar ON' : 'Auto-Notificar OFF'}
+              </button>
+              <button onClick={() => { setLaborInput('0'); setNewOrder({ client: '', deviceModel: '', receptionist: 'ADMIN', cost: 0, usedProducts: [], entryDate: getCurrentDate(), entryTime: getCurrentTime() }); setShowModal(true); }} className="bg-primary-600 text-white px-4 py-2 rounded-xl text-[10px] font-black hover:bg-primary-700 shadow-lg flex items-center gap-2 transition-all active:scale-95"><Plus size={14}/> NUEVA RECEPCIÓN</button>
+          </div>
        </div>
 
        <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 overflow-hidden flex-1 flex flex-col">
@@ -273,7 +359,15 @@ export const ServicesModule: React.FC<ServicesProps> = ({ services, products, ca
                                                     <MessageCircle size={12} className="text-emerald-500"/> Notificar Equipo
                                                 </button>
                                             )}
-                                            {s.status === 'Pendiente' && <button onClick={() => { onMarkRepaired(s.id); setOpenMenuId(null); }} className="w-full px-3 py-2 text-[9px] font-black text-slate-600 flex items-center gap-2 hover:bg-blue-50"><CheckSquare size={12} className="text-blue-500"/> Marcar Listo</button>}
+                                            {s.status === 'Pendiente' && (
+                                                <button 
+                                                    onClick={() => handleMarkAndNotify(s)} 
+                                                    className="w-full px-3 py-2 text-[9px] font-black text-slate-600 flex items-center gap-2 hover:bg-blue-50"
+                                                >
+                                                    <CheckSquare size={12} className="text-blue-500"/> 
+                                                    {autoNotify ? 'Listo + Notificar' : 'Marcar Listo'}
+                                                </button>
+                                            )}
                                             {(s.status === 'Reparado' || s.status === 'Pendiente') && <button onClick={() => { setSelectedService(s); setPaymentList([]); setCurrentPayment({method:'Efectivo', amount: calculateOrderTotal(s).toFixed(2), reference:'', accountId:''}); setShowDeliverModal(true); setOpenMenuId(null); }} className="w-full px-3 py-2 text-[9px] font-black text-slate-600 flex items-center gap-2 hover:bg-emerald-50"><CheckCircle size={12} className="text-emerald-500"/> Entregar / Cobrar</button>}
                                         </div>
                                     )}
@@ -471,10 +565,31 @@ export const ServicesModule: React.FC<ServicesProps> = ({ services, products, ca
                <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50/50 dark:bg-slate-900/50"><h3 className="font-black text-base text-slate-800 dark:text-white flex items-center gap-3 uppercase tracking-tighter"><UserPlus className="text-primary-600" size={20}/> Nuevo Cliente</h3><button onClick={() => setShowClientModal(false)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"><X size={20}/></button></div>
                <div className="p-8 space-y-6">
                     <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Nombre Completo</label><input type="text" className="w-full p-3.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl font-bold uppercase outline-none focus:border-primary-500 shadow-sm text-sm" value={newClientData.name} onChange={e => setNewClientData({...newClientData, name: e.target.value})} placeholder="EJ. JUAN PÉREZ" autoFocus /></div>
+                    
                     <div className="grid grid-cols-2 gap-6">
-                        <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">DNI / RUC</label><input type="text" className="w-full p-3.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl font-bold outline-none focus:border-primary-500 text-sm" value={newClientData.dni} onChange={e => setNewClientData({...newClientData, dni: e.target.value})} placeholder="00000000" /></div>
+                        <div className="space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">DNI / RUC</label>
+                            <div className="relative">
+                                <input 
+                                    type="text" 
+                                    className="w-full p-3.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl font-bold outline-none focus:border-primary-500 text-sm pr-12" 
+                                    value={newClientData.dni} 
+                                    onChange={e => setNewClientData({...newClientData, dni: e.target.value})} 
+                                    placeholder="00000000" 
+                                />
+                                <button 
+                                    onClick={searchClientByDoc}
+                                    disabled={isSearchingClient}
+                                    className="absolute right-2 top-2 bottom-2 px-3 bg-white dark:bg-slate-600 rounded-lg text-primary-600 dark:text-white hover:bg-primary-50 dark:hover:bg-slate-500 transition-colors shadow-sm disabled:opacity-50 flex items-center justify-center"
+                                    title="Buscar en RENIEC/SUNAT"
+                                >
+                                    {isSearchingClient ? <Loader2 size={16} className="animate-spin"/> : <CloudDownload size={16}/>}
+                                </button>
+                            </div>
+                        </div>
                         <div className="space-y-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">Teléfono</label><input type="text" className="w-full p-3.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl font-bold outline-none focus:border-primary-500 text-sm" value={newClientData.phone} onChange={e => setNewClientData({...newClientData, phone: e.target.value})} placeholder="999 999 999" /></div>
                     </div>
+                    
                     <div className="flex justify-end gap-4 pt-4"><button onClick={() => setShowClientModal(false)} className="px-10 py-4 text-slate-500 font-bold hover:bg-slate-100 rounded-2xl transition-all uppercase tracking-widest text-xs">Cancelar</button><button onClick={() => { if (!newClientData.name || !newClientData.dni) return alert("Nombre y DNI obligatorios."); const cl: Client = { id: Date.now().toString(), name: newClientData.name.toUpperCase(), dni: newClientData.dni, phone: newClientData.phone, creditLine: 0, creditUsed: 0, totalPurchases: 0, paymentScore: 3, digitalBalance: 0 }; if (onAddClient) onAddClient(cl); setNewOrder(prev => ({...prev, client: cl.name, clientPhone: cl.phone})); setShowClientModal(false); }} className="px-12 py-4 bg-primary-600 text-white font-black rounded-2xl hover:bg-primary-700 shadow-xl transition-all text-xs uppercase tracking-widest">Guardar y Vincular</button></div>
                </div>
            </div>

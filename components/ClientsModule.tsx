@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Search, UserPlus, MessageCircle, Wallet, User, Phone, FileText, X, MapPin, CloudDownload, Loader2 } from 'lucide-react';
 import { Client, GeoLocation } from '../types';
 
@@ -8,9 +8,16 @@ interface ClientsModuleProps {
     onAddClient: (client: Client) => void;
     onOpenWhatsApp?: (name: string, phone: string, message?: string) => void;
     locations?: GeoLocation[];
+    
+    // New Props for Integration
+    initialData?: { name: string, phone: string } | null;
+    onClearInitialData?: () => void;
 }
 
-export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClient, onOpenWhatsApp, locations = [] }) => {
+export const ClientsModule: React.FC<ClientsModuleProps> = ({ 
+    clients, onAddClient, onOpenWhatsApp, locations = [], 
+    initialData, onClearInitialData 
+}) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [newClientData, setNewClientData] = useState({ 
@@ -18,6 +25,18 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClie
       department: 'CUSCO', province: 'CUSCO', district: '' 
   });
   const [isSearchingClient, setIsSearchingClient] = useState(false);
+
+  // Effect to handle incoming data from other modules (like WhatsApp)
+  useEffect(() => {
+      if (initialData) {
+          setNewClientData(prev => ({
+              ...prev,
+              name: initialData.name,
+              phone: initialData.phone
+          }));
+          setShowModal(true);
+      }
+  }, [initialData]);
 
   const totalDebt = clients.reduce((acc, c) => acc + (c.creditUsed || 0), 0);
 
@@ -39,7 +58,6 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClie
     if (!newClientData.dni) return;
     setIsSearchingClient(true);
     
-    // SIMULACION DE API
     setTimeout(() => {
         const isRuc = newClientData.dni.length === 11;
         const isDni = newClientData.dni.length === 8;
@@ -66,7 +84,7 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClie
             alert("Formato de documento no válido (8 u 11 dígitos)");
         }
         setIsSearchingClient(false);
-    }, 1500);
+    }, 1000);
   };
 
   const handleSave = () => {
@@ -77,6 +95,12 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClie
       onAddClient(cl);
       setShowModal(false);
       setNewClientData({ name: '', dni: '', phone: '', address: '', email: '', department: 'CUSCO', province: 'CUSCO', district: '' });
+      if (onClearInitialData) onClearInitialData();
+  };
+
+  const handleCloseModal = () => {
+      setShowModal(false);
+      if (onClearInitialData) onClearInitialData();
   };
 
   return (
@@ -185,7 +209,7 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClie
                 <div className="bg-white dark:bg-slate-800 rounded-[2rem] shadow-2xl w-full max-w-3xl border border-white/20 animate-in zoom-in-95 duration-300 overflow-hidden">
                     <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center bg-slate-50/50">
                         <h3 className="font-black text-base text-slate-800 dark:text-white flex items-center gap-3 uppercase tracking-tighter"><UserPlus className="text-primary-600" size={20}/> Nuevo Cliente</h3>
-                        <button onClick={() => setShowModal(false)} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"><X size={20}/></button>
+                        <button onClick={handleCloseModal} className="p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors"><X size={20}/></button>
                     </div>
                     <div className="p-8 space-y-6 overflow-y-auto max-h-[80vh]">
                         <div className="space-y-1">
@@ -244,7 +268,7 @@ export const ClientsModule: React.FC<ClientsModuleProps> = ({ clients, onAddClie
                             </div>
                         </div>
                         <div className="flex justify-end gap-4 pt-4">
-                            <button onClick={() => setShowModal(false)} className="px-10 py-4 text-slate-500 font-bold hover:bg-slate-100 rounded-2xl transition-all uppercase tracking-widest text-xs">Cancelar</button>
+                            <button onClick={handleCloseModal} className="px-10 py-4 text-slate-500 font-bold hover:bg-slate-100 rounded-2xl transition-all uppercase tracking-widest text-xs">Cancelar</button>
                             <button onClick={handleSave} className="px-12 py-4 bg-primary-600 text-white font-black rounded-2xl hover:bg-primary-700 shadow-xl transition-all text-xs uppercase tracking-widest">Guardar Cliente</button>
                         </div>
                     </div>

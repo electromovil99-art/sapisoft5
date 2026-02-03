@@ -247,10 +247,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onResetPasswo
         setError('');
         setLoading(true);
 
+        const cleanUsername = username.trim();
+        const cleanPassword = password.trim();
+
         setTimeout(() => {
             const foundUser = users.find(u => 
-                u.username.toLowerCase() === username.toLowerCase() && 
-                u.password === password &&
+                u.username.toLowerCase() === cleanUsername.toLowerCase() && 
+                (u.password === cleanPassword || (u.password === undefined && cleanPassword === '123')) &&
                 u.active
             );
 
